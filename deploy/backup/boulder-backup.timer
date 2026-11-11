@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly backup of boulder's state to pve2 (02:20, clear of the 03:14 test run)
+
+[Timer]
+OnCalendar=*-*-* 02:20:00
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

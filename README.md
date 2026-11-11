@@ -305,6 +305,8 @@ the machine powers itself off if nothing touches it for 40 minutes.
 | `drills/people.py`, `drills/office.py` | the people at the computers, their working day, and what they notice and answer |
 | `ts/aiconfig.py` | which model each job uses, endpoints, keys and usage |
 | `ts/collect.py`, `ts/training.py`, `ts/trainspec.py`, `deploy/trainer/` | collecting and fine-tuning |
+| `deploy/backup/` | the nightly backup to pve2 and its weekly restore check |
+| `deploy/health/` | the five-minute health check and its emails |
 | `ts/web.py`, `ts/overview.py`, `ts/store.py`, `ts/static/` | the UI and the API behind it: `app.js` and `app.css` draw the pages, `index.html` and `base.css` are this service's own frame |
 
 ## Where the pages are
@@ -324,6 +326,33 @@ pages under `/troubleshooting`, the service desk under `/desk/`, NetBox under `/
 (a second NetBox front end, `netbox-public`). Links between the desk and these pages use
 the ports on the LAN and those paths on the public address (no port). The nginx site,
 the NetBox front end and its env-file writer are in `deploy/nmas/`.
+
+## Keeping it running
+
+The watcher, the replay page and the desk run as services (`deploy/install.sh`, run once
+with sudo), so they come back after a reboot.
+
+**Backups.** Every night at about 02:20, `deploy/backup/boulder_backup.py run` copies boulder's
+own state to pve2: Netman's accounts and state, this project's `data/` and `secrets/`, the
+NetBox, Guacamole and training databases, and Jenkins's configuration (jobs, credentials,
+users; no build history). SQLite files are copied safely while they are in use, as their
+owner. The copies go to `boulderbak@pve2:/srv/boulder-backup/data/<date>/`; that account
+can only rsync into that folder. pve2 keeps 30 days, never fewer than the 7 newest. Every
+Sunday at 05:40 `boulder_backup.py check` fetches the newest copy back, restores each
+database into a throwaway server with no network, and compares every table's rows. The
+data lake on pve is not included. Install with `sudo deploy/backup/install.sh` on boulder,
+then `deploy/backup/pve2-setup.sh '<printed key>'` as root on pve2. The result of the last
+backup and check is in `/var/lib/boulder-backup/status.json`.
+
+**Health check.** Every five minutes `deploy/health/health_check.py` looks at the services,
+containers and lab devices, every page and tool, the nmas sign-in gate, the data lake's
+newest event, the watcher, the embedding server, the backups, the root disk and the Jenkins
+jobs that matter. A problem seen twice in a row is emailed through the local mailer, so is
+its recovery, and anything still failing is repeated every 12 hours. Once an hour, if
+`~/.config/nmas/health-check.json` holds a monitor account, it also signs in on the public
+address and opens each tool with its styles. Results: `data/health.json`; to look by hand:
+`.venv/bin/python deploy/health/health_check.py --print`. Install with
+`sudo deploy/health/install.sh`.
 
 ## Commands
 
@@ -346,7 +375,6 @@ Secrets live in `secrets/`, which git ignores: `opencode.env` (the model), `graf
 
 ## Not yet
 
-- The watcher, UI and desk are plain background processes until `deploy/install.sh` is run, so a reboot stops them.
 - The desk and console have no login: people pick their name from a list, and anyone who can reach the console can change models and endpoints.
 - Fine-tuning rents from Vast only. The hackathon's RunPod, Brev and Fireworks routes and its teacher step were not brought over.
 - RIP links are not probed for packet loss, only OSPF links.

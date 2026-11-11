@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly restore check of boulder's backup (Sunday 05:40, after the nightly test run)
+
+[Timer]
+OnCalendar=Sun *-*-* 05:40:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

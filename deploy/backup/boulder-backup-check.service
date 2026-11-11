@@ -1,0 +1,12 @@
+[Unit]
+Description=Restore boulder's newest backup from pve2 into throwaway copies and check it
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/boulder-backup/boulder_backup.py check
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=2h

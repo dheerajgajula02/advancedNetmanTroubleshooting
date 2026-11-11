@@ -1,0 +1,10 @@
+[Unit]
+Description=Health check of boulder and everything Netman needs; emails what breaks or comes back
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=dheeraj
+WorkingDirectory=/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting
+ExecStart=/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting/.venv/bin/python deploy/health/health_check.py
+TimeoutStartSec=5min
