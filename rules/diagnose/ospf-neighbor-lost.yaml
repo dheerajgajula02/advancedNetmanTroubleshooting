@@ -1,0 +1,101 @@
+id: ospf-neighbor-lost
+title: An OSPF neighbor is lost
+table: diagnose
+priority: 100
+description: A device said an OSPF neighbor went down. Confirm it is still down, rule out the link, then compare OSPF on both ends.
+trigger: An OSPF neighbor trap says a neighbor went down. The watcher waits two and a half minutes, so a neighbor that comes straight back ends as a short flap.
+match:
+  event: ospf.neighbor_down
+  platform: eos
+mode: active
+position: main
+tags: [routing/ospf]
+source: {by: seed}
+
+steps:
+  - id: state
+    phase: confirm
+    ask: Is OSPF neighbor {neighbor_id} still down on {device}?
+    check: ospf_neighbor_state {device} {neighbor_id}
+    then:
+      full: stop Not confirmed. OSPF to {neighbor_id} is full again, so this was a short flap.
+
+  - id: port
+    ask: Which port on {device} faces {neighbor_ip}?
+    check: neighbor_port {device} {neighbor_ip}
+    then:
+      none: escalate No port on {device} is in the same subnet as {neighbor_ip}, so the address may have changed.
+  - id: link
+    ask: Did {interface} go down at the same moment?
+    check: link_went_down {device} {interface}
+    then:
+      went_down: cause ospf.link_down
+  - id: now
+    ask: Is {interface} up on {device}?
+    check: interface_status {device} {interface}
+    then:
+      admin_down: cause interface.admin_shut
+      down: cause interface.no_link
+      errdisabled: cause interface.errdisabled
+      not_found: cause interface.missing
+  - id: local-ospf
+    ask: Is OSPF running on {interface}?
+    check: ospf_interface {device} {interface}
+    then:
+      passive: cause ospf.passive
+      not_enabled: cause ospf.not_enabled
+  - id: peer
+    ask: What is on the other end of {interface}?
+    check: topology_peer {device} {interface}
+    then:
+      none: escalate The cabling inventory has no link on {interface}, so the far end cannot be checked.
+  - id: peer-device
+    ask: Is {peer_device} up?
+    check: device_up {peer_device}
+    then:
+      down: cause device.down device={peer_device}
+  - id: peer-port
+    ask: Is {peer_interface} up on {peer_device}?
+    check: interface_status {peer_device} {peer_interface}
+    then:
+      admin_down: cause interface.far_end_shut far_device={peer_device} far_interface={peer_interface}
+      errdisabled: cause interface.far_end_errdisabled far_device={peer_device} far_interface={peer_interface}
+      not_found: cause interface.missing device={peer_device} interface={peer_interface}
+  - id: reach
+    ask: Do packets still cross to {neighbor_ip}?
+    check: ping {device} {neighbor_ip}
+    then:
+      unreachable: cause link.silent_fault
+  - id: peer-ospf
+    ask: Is OSPF running on {peer_interface} on {peer_device}?
+    check: ospf_interface {peer_device} {peer_interface}
+    then:
+      passive: cause ospf.passive device={peer_device} interface={peer_interface}
+      not_enabled: cause ospf.not_enabled device={peer_device} interface={peer_interface}
+  - id: params
+    ask: Do both ends agree on area, timers and network type?
+    check: ospf_params_match {device} {interface} {peer_device} {peer_interface}
+    then:
+      mismatch: cause ospf.params_mismatch
+  - id: config
+    ask: Has the OSPF config on {device} changed from its known-good copy?
+    check: known_good_match {device} router_ospf
+    then:
+      drift: cause config.drift section=OSPF
+
+end: escalate OSPF to {neighbor_id} is down while the link is up and both ends match. A person needs to look.
+
+causes:
+  ospf.link_down: "OSPF to {neighbor_id} dropped because {interface} went down. The link-down run has the cause."
+  ospf.passive: "{interface} on {device} is passive, so OSPF cannot form a neighbor there."
+  ospf.not_enabled: "OSPF is not running on {interface} on {device}."
+  ospf.params_mismatch: "OSPF cannot form on {interface} because the two ends disagree: {mismatch}."
+  interface.admin_shut: "{interface} on {device} is shut down."
+  interface.no_link: "{interface} on {device} is enabled but has no link."
+  interface.errdisabled: "{device} error-disabled {interface}."
+  interface.missing: "{interface} no longer exists on {device}."
+  interface.far_end_shut: "The far end, {far_interface} on {far_device}, is shut down."
+  interface.far_end_errdisabled: "The far end, {far_interface} on {far_device}, is error-disabled."
+  device.down: "The device on the other end, {device}, is down."
+  link.silent_fault: "{interface} on {device} and {peer_interface} on {peer_device} both say they are up, but packets do not cross. The cable or optics between them are the likely fault."
+  config.drift: "The {section} config on {device} no longer matches its known-good copy, in: {drift_lines}."

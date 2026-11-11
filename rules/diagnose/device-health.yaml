@@ -1,0 +1,48 @@
+id: device-health
+title: A device restarts or stops answering
+table: diagnose
+priority: 100
+description: A device reported a restart or stopped answering. Check it is up and reachable, whether it really restarted, and whether it came back with the right config.
+trigger: A restart trap arrives, or the sweep sees a device stop answering. Restart traps from one device are merged until it has been quiet for three minutes.
+match:
+  event: [device.restarted, device.unreachable]
+mode: active
+position: main
+tags: [device/restart, device/unreachable]
+quiet_stops: true
+source: {by: seed}
+
+steps:
+  - id: console
+    phase: confirm
+    ask: Does {device} answer at all?
+    check: device_up {device}
+    then:
+      down: cause device.down
+  - id: mgmt
+    phase: confirm
+    ask: Does {device} answer on its management address?
+    check: mgmt_reachable {device}
+    then:
+      unreachable: cause device.mgmt_unreachable
+  - id: uptime
+    phase: confirm
+    ask: Did {device} really restart?
+    check: recently_restarted {device}
+    then:
+      not_recent: stop {device} is up, reachable and has not restarted, so only its SNMP agent did.
+
+  - id: config
+    ask: Did {device} come back with its known-good config?
+    check: known_good_match {device} all
+    then:
+      match: cause device.restarted_clean
+      drift: cause device.restarted_drifted
+
+end: escalate {device} restarted at {started_at} and there is no known-good copy to compare it with.
+
+causes:
+  device.down: "{device} is down and does not answer."
+  device.mgmt_unreachable: "{device} answers on its console but not on its management address."
+  device.restarted_clean: "{device} restarted at {started_at} and came back with its known-good config."
+  device.restarted_drifted: "{device} restarted at {started_at} and came back different from its known-good copy, in: {drift_lines}."

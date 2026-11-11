@@ -1,0 +1,32 @@
+id: nat-missing
+title: A border router loses its NAT rule
+table: diagnose
+priority: 100
+description: The outbound NAT rule disappeared from a border router. Confirm it is really gone.
+trigger: The sweep checks each border router's NAT table once a minute, and the rule was not there.
+match:
+  event: nat.missing
+  platform: frr
+mode: active
+position: main
+tags: [service/nat]
+source: {by: seed}
+
+steps:
+  - id: window
+    phase: confirm
+    ask: Was an automation job running when this arrived?
+    check: change_window_open
+    then:
+      open: stop A job held the change lock, so this was expected.
+  - id: rule
+    phase: confirm
+    ask: Is the NAT rule really gone from {device}?
+    check: nat_rule_present {device}
+    then:
+      present: stop Not confirmed. The NAT rule is there now.
+
+end: cause border.nat_missing
+
+causes:
+  border.nat_missing: "{device} has lost its outbound NAT rule, so traffic leaving through it would not be translated."

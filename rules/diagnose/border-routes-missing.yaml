@@ -1,0 +1,34 @@
+id: border-routes-missing
+title: A border router loses its return routes
+table: diagnose
+priority: 100
+description: The routes that bring IPv6 replies back to the VLANs disappeared from a border router. They come from its startup script, so its config can match known-good while they are gone.
+trigger: The sweep compares each border router's routing table with its startup script once a minute, and some routes were not there.
+match:
+  event: routes.missing
+  platform: frr
+mode: active
+position: main
+tags: [routing/route]
+source: {by: seed}
+
+steps:
+  - id: window
+    phase: confirm
+    ask: Was an automation job running when this arrived?
+    check: change_window_open
+    then:
+      open: stop A job held the change lock, so this was expected.
+  - id: routes
+    phase: confirm
+    ask: Are the return routes really gone from {device}?
+    check: border_routes_present {device}
+    then:
+      present: stop Not confirmed. The return routes are there now.
+      interface_down: stop The port those routes leave through is down. That is its own fault, and the routes can only come back once it is up.
+      unreadable: escalate The startup script or the routing table on {device} could not be read, so there is nothing to compare.
+
+end: cause border.routes_missing
+
+causes:
+  border.routes_missing: "{device} has lost the IPv6 routes that bring replies back to the VLANs, so those replies leave through its ISP link instead."

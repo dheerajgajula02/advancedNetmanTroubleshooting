@@ -1,0 +1,26 @@
+# Guacamole signs nmas.shiplabs.net visitors in as their Netman account.
+#
+# The lab's Guacamole lives in ~/advancedNetman/lab1/guacamole/docker-compose.yml, which
+# this override leaves untouched. It adds Guacamole's header login: HTTP_AUTH_HEADER names
+# the header (a shared secret) that nginx on the GCP proxy fills with the Netman account,
+# after Netman's /auth/verify said yes. Without that header (the LAN, :8088) Guacamole's
+# own database login works as before.
+#
+#   ~/.config/nmas/guacamole-header.env   (mode 600)  HTTP_AUTH_HEADER=X-Nmas-Guac-<secret>
+#   GCP /etc/nginx/nmas-guacamole-secret.conf (600)   proxy_set_header <same name> $nmas_user;
+#
+# Recreate only the web container (guacd and postgres keep running):
+#
+#   docker compose -p guacamole --project-directory ~/advancedNetman/lab1/guacamole \
+#     -f ~/advancedNetman/lab1/guacamole/docker-compose.yml \
+#     -f deploy/nmas/guacamole-header.override.yml up -d --no-deps --pull never guacamole
+#
+# Running the lab1 compose file alone recreates it without the header login.
+#
+# Accounts: Guacamole only applies database permissions to header users that exist in its
+# database. Netman admins belong in the group netman-admin (administers everything); plain
+# users in netman-user (gets only the connections granted to that group). A new Netman
+# account needs a matching Guacamole user added to one of the two groups.
+services:
+  guacamole:
+    env_file: ${HOME}/.config/nmas/guacamole-header.env

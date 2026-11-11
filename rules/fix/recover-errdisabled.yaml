@@ -1,0 +1,18 @@
+id: recover-errdisabled
+title: Bounce the error-disabled port
+table: fix
+priority: 100
+description: A port error-disabled itself. Bouncing it clears the state, but it can come straight back, so this only reports what it would do until it has been seen working.
+match:
+  cause: interface.errdisabled
+mode: shadow
+position: main
+tags: [link/port]
+source: {by: seed}
+risk: medium
+require:
+  - change_window_open == closed
+action:
+  do: recover_port {device} {interface}
+verify:
+  - interface_status {device} {interface} == up

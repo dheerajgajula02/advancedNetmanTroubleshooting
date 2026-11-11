@@ -1,0 +1,68 @@
+id: internet-unreachable
+title: A host loses the internet
+table: diagnose
+priority: 100
+description: A host cannot reach the internet test address. Walk outwards from the host through its gateway to both border routers.
+trigger: The one-minute sweep's ping from a host to the internet test address fails after working before.
+match:
+  event: internet.unreachable
+  role: host
+mode: active
+position: main
+tags: [service/internet]
+source: {by: seed}
+
+steps:
+  - id: reach
+    phase: confirm
+    ask: Is {internet_target} still unreachable from {device}?
+    check: ping {device} {internet_target}
+    then:
+      reachable: stop Not confirmed. {device} reaches {internet_target} again.
+
+  - id: default-route
+    ask: Does {device} have a default route?
+    check: route_present {device} {default_prefix}
+    then:
+      missing: cause route.default_missing
+  - id: gateway
+    ask: Does {device} get a reply from its gateway {route_via}?
+    check: ping {device} {route_via}
+    then:
+      unreachable: cause internet.gateway_unreachable
+  - id: r3-nat
+    ask: Does r3 still have its outbound NAT rule?
+    check: nat_rule_present r3
+    then:
+      missing: cause border.nat_missing device=r3
+  - id: r4-nat
+    ask: Does r4 still have its outbound NAT rule?
+    check: nat_rule_present r4
+    then:
+      missing: cause border.nat_missing device=r4
+  - id: r3-routes
+    ask: Does r3 still have the routes that bring replies back to the VLANs?
+    check: border_routes_present r3
+    then:
+      missing: cause border.routes_missing device=r3
+  - id: r4-routes
+    ask: Does r4 still have the routes that bring replies back to the VLANs?
+    check: border_routes_present r4
+    then:
+      missing: cause border.routes_missing device=r4
+  - id: borders
+    ask: Can the border routers reach the internet?
+    check: border_internet
+    then:
+      none: cause internet.both_borders_cut
+      one: cause internet.one_border_cut
+
+end: escalate Both border routers reach the internet but {device} does not, so the fault is on the path between them. A person needs to look.
+
+causes:
+  route.default_missing: "{device} has no default route."
+  internet.gateway_unreachable: "{device} cannot reach its gateway {route_via}."
+  border.nat_missing: "{device} has lost its outbound NAT rule."
+  border.routes_missing: "{device} has lost the IPv6 routes that bring replies back to the VLANs, so those replies leave through its ISP link instead."
+  internet.both_borders_cut: "Neither border router reaches the internet, so the fault is at the uplinks or beyond. R5 is out of scope."
+  internet.one_border_cut: "{cut_border} cannot reach the internet, while {working_border} can."

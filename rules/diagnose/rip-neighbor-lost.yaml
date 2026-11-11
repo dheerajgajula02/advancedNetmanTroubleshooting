@@ -1,0 +1,63 @@
+id: rip-neighbor-lost
+title: A RIP neighbor goes quiet
+table: diagnose
+priority: 100
+description: A device stopped hearing a RIP neighbor. Rule out the link, then check RIP on both ends and the RIP config.
+trigger: The one-minute sweep sees a RIP neighbor go unheard for two minutes or disappear. RIP sends no traps.
+match:
+  event: rip.neighbor_lost
+  platform: eos
+mode: active
+position: main
+tags: [routing/rip]
+source: {by: seed}
+
+steps:
+  - id: heard
+    phase: confirm
+    ask: Is RIP from {neighbor_ip} still quiet on {device}?
+    check: rip_neighbor_heard {device} {neighbor_ip}
+    then:
+      recent: stop Not confirmed. {device} is hearing RIP from {neighbor_ip} again, so this was a short gap.
+
+  - id: port
+    ask: Which port on {device} faces {neighbor_ip}?
+    check: neighbor_port {device} {neighbor_ip}
+    then:
+      none: escalate No port on {device} is in the same subnet as {neighbor_ip}.
+  - id: now
+    ask: Is {interface} up on {device}?
+    check: interface_status {device} {interface}
+    then:
+      admin_down: cause interface.admin_shut
+      down: cause interface.no_link
+      errdisabled: cause interface.errdisabled
+      not_found: cause interface.missing
+  - id: local-rip
+    ask: Is RIP allowed to speak on {interface}?
+    check: rip_interface {device} {interface}
+    then:
+      passive: cause rip.passive
+      not_enabled: cause rip.not_enabled
+  - id: config
+    ask: Has the RIP config on {device} changed from its known-good copy?
+    check: known_good_match {device} router_rip
+    then:
+      drift: cause config.drift
+  - id: reach
+    ask: Does {neighbor_ip} still answer a ping from {device}?
+    check: ping {device} {neighbor_ip}
+    then:
+      unreachable: cause rip.neighbor_unreachable
+
+end: escalate {neighbor_ip} answers pings but RIP from it has gone quiet, and {device}'s config is unchanged. A person needs to look.
+
+causes:
+  rip.passive: "{interface} on {device} is passive under RIP."
+  rip.not_enabled: "No RIP network statement on {device} covers {interface}."
+  rip.neighbor_unreachable: "{neighbor_ip} no longer answers on {interface}, so the neighbor itself is the problem."
+  interface.admin_shut: "{interface} on {device} is shut down."
+  interface.no_link: "{interface} on {device} is enabled but has no link."
+  interface.errdisabled: "{device} error-disabled {interface}."
+  interface.missing: "{interface} no longer exists on {device}."
+  config.drift: "The RIP config on {device} no longer matches its known-good copy, in: {drift_lines}."

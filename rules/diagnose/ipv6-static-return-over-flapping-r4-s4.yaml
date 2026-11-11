@@ -1,0 +1,53 @@
+id: ipv6-static-return-over-flapping-r4-s4
+title: "Check IPv6 static return routing when the r4\u2013s4 link drops"
+table: diagnose
+priority: 100
+description: For slow-but-working web complaints, check whether s4 Ethernet1 dropped
+  around the incident and whether r4 statically pins the internal IPv6 aggregate to
+  that link. OSPF may already have moved elsewhere, so a clean instantaneous ping
+  does not exclude this fault; also inspect more-specific Linux IPv6 return routes
+  before declaring the diversion complete.
+trigger: Runs for service/internet, link/flap, at the end of the checks.
+match:
+  tags:
+  - service/internet
+  - link/flap
+mode: shadow
+position: end
+tags:
+- service/internet
+- link/flap
+source:
+  by: ai
+  incident: 20261110T032907Z-h7-ticket
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-09T22:25:22'
+steps:
+- id: s1
+  ask: Did the core-facing border link go down around this incident?
+  check:
+    name: link_went_down
+    args:
+      device: s4
+      interface: Ethernet1
+  then:
+    stayed_up: stop No contemporaneous link-down evidence for this specific border-link
+      fault.
+    error: escalate Unable to read border-link event history.
+    unsupported: escalate Border-link event history is unavailable.
+- id: s2
+  ask: Does the border statically pin its internal IPv6 aggregate to that failed link?
+  check:
+    name: output_has
+    args:
+      device: r4
+      command: show running-config
+      text: ipv6 route 2001:db8::/48 2001:db8:100:44::1
+  then:
+    found: cause routing.static_return_on_failed_link device=r4
+    absent: stop The static aggregate is not pinned to this failed link.
+causes:
+  routing.static_return_on_failed_link: "r4 pins IPv6 return traffic to the r4 eth3\u2013\
+    s4 Ethernet1 link even when link loss forces OSPF to use the alternate path."
+end: stop This rule's checks found nothing, so the others carry on.

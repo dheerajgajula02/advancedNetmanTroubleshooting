@@ -1,0 +1,19 @@
+id: restore-nat
+title: Put the NAT rule back
+table: fix
+priority: 100
+description: A border router lost its outbound NAT rule. Add it back.
+match:
+  cause: border.nat_missing
+  platform: frr
+mode: active
+position: main
+tags: [service/nat]
+source: {by: seed}
+risk: low
+require:
+  - change_window_open == closed
+action:
+  do: restore_nat {device}
+verify:
+  - nat_rule_present {device} == present

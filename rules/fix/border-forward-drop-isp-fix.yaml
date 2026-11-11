@@ -1,0 +1,54 @@
+id: border-forward-drop-isp-fix
+title: Remove the over-broad FORWARD drop toward the ISP port on the border router
+  that has it
+table: fix
+priority: 100
+description: Remove the over-broad FORWARD drop toward the ISP port on the border
+  router that has it (suggested by the AI)
+match:
+  cause:
+  - firewall.forward_dropped_isp
+  platform: frr
+mode: shadow
+position: main
+tags:
+- service/internet
+source:
+  by: ai
+  incident: 20261109T001637Z-h1-internet
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-08T18:43:49'
+require:
+- change_window_open == closed
+action:
+  do:
+    name: linux_change
+    args:
+      device: '{device}'
+      argv:
+      - iptables
+      - -D
+      - FORWARD
+      - -o
+      - eth1
+      - -j
+      - DROP
+      undo_argv:
+      - iptables
+      - -I
+      - FORWARD
+      - '1'
+      - -o
+      - eth1
+      - -j
+      - DROP
+verify:
+- check:
+    name: ping
+    args:
+      device: '{alarm_device}'
+      target: 8.8.8.8
+  expect:
+  - reachable
+risk: low

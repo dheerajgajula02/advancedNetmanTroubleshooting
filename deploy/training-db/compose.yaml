@@ -1,0 +1,20 @@
+# Training-data database for the troubleshooting AI.
+# Start it with: docker compose -f deploy/training-db/compose.yaml up -d
+# It listens on this machine only, and uses Docker's default bridge so it adds no network that could clash with the lab.
+name: ts-training
+services:
+  db:
+    image: timescale/timescaledb:2.21.3-pg17
+    container_name: ts-training-db
+    network_mode: bridge
+    restart: unless-stopped
+    env_file: ../../secrets/trainingdb.env
+    environment:
+      NO_TS_TUNE: "true"  # the tuner would size it for the whole machine, and this machine is shared
+    ports:
+      - "127.0.0.1:5444:5432"
+    volumes:
+      - ts-training-data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/010-schema.sql:ro
+volumes:
+  ts-training-data:

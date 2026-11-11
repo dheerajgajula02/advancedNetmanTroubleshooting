@@ -1,0 +1,52 @@
+id: warehouse-annex-reciprocal-return-loop-fix
+title: Remove only the looping warehouse kernel override
+table: fix
+priority: 100
+description: Remove only the looping warehouse kernel override (suggested by the AI)
+match:
+  cause:
+  - routing.forwarding_loop
+  platform:
+  - frr
+  - linux
+mode: active
+position: main
+tags:
+- service/internet
+- routing/route
+source:
+  by: ai
+  incident: 20261110T045646Z-h6-ticket
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-09T22:25:33'
+require:
+- change_window_open == closed
+action:
+  do:
+    name: linux_change
+    args:
+      device: '{device}'
+      argv:
+      - ip
+      - route
+      - del
+      - 10.10.10.224/28
+      - via
+      - 10.0.46.2
+      undo_argv:
+      - ip
+      - route
+      - add
+      - 10.10.10.224/28
+      - via
+      - 10.0.46.2
+verify:
+- check:
+    name: ping
+    args:
+      device: '{alarm_device}'
+      target: 8.8.8.8
+  expect:
+  - reachable
+risk: low

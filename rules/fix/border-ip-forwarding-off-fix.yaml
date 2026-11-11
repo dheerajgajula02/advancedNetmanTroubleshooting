@@ -1,0 +1,43 @@
+id: border-ip-forwarding-off-fix
+title: Re-enable IPv4 forwarding on the border router
+table: fix
+priority: 100
+description: Re-enable IPv4 forwarding on the border router (suggested by the AI)
+match:
+  cause:
+  - config.forwarding_disabled
+  platform: frr
+mode: shadow
+position: main
+tags:
+- service/internet
+source:
+  by: ai
+  incident: 20261109T031837Z-h1-internet
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-08T20:51:53'
+require:
+- change_window_open == closed
+action:
+  do:
+    name: linux_change
+    args:
+      argv:
+      - sysctl
+      - -w
+      - net.ipv4.ip_forward=1
+      device: '{device}'
+      undo_argv:
+      - sysctl
+      - -w
+      - net.ipv4.ip_forward=0
+verify:
+- check:
+    name: ping
+    args:
+      device: '{alarm_device}'
+      target: 8.8.8.8
+  expect:
+  - reachable
+risk: low

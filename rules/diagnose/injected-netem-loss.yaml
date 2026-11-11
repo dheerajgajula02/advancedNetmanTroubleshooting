@@ -1,0 +1,53 @@
+id: injected-netem-loss
+title: 'Port loss with clean errors: check for a netem qdisc on the port'
+table: diagnose
+priority: 100
+description: When a link is up, both ends are up, neither port counts errors, but
+  the link loses a fixed-ish percentage of packets, look on the router for a netem
+  qdisc on that port before believing the cable/optics are failing. A netem qdisc
+  set to 'loss N%' drops packets in software, so counters stay clean and hardware
+  replacement fixes nothing. If found, delete the qdisc with 'tc qdisc del dev <port>
+  root'.
+trigger: Runs for link/loss, at the beginning of the checks.
+match:
+  tags:
+  - link/loss
+  platform: frr
+mode: shadow
+position: beginning
+tags:
+- link/loss
+source:
+  by: ai
+  incident: 20261109T013337Z-r3-link_eth3
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-08T18:43:44'
+steps:
+- id: s1
+  ask: Does the port carry a netem qdisc, i.e. are the drops injected in software?
+  check:
+    name: output_has
+    args:
+      command: tc qdisc show dev {interface}
+      device: '{device}'
+      text: netem
+  then:
+    absent: stop no qdisc impairment on {interface}, fall through to the normal link
+      checks
+    found: next
+- id: s2
+  ask: Is that qdisc actually dropping packets (configured with loss)?
+  check:
+    name: output_has
+    args:
+      command: tc qdisc show dev {interface}
+      device: '{device}'
+      text: loss
+  then:
+    found: cause link.deliberate_loss device={device}
+causes:
+  link.deliberate_loss: A netem qdisc on the port drops a configured percentage of
+    packets in software, so the link looks lossy while both ports stay up and neither
+    counts errors.
+end: stop This rule's checks found nothing, so the others carry on.

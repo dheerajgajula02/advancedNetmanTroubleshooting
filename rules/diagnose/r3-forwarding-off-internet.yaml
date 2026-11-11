@@ -1,0 +1,41 @@
+id: r3-forwarding-off-internet
+title: Border r3 drops hosts' internet traffic with kernel IPv4 forwarding off
+table: diagnose
+priority: 100
+description: 'For h1/h2 internet outages where the host reaches its gateway 10.10.10.1
+  and both borders reach 8.8.8.8: read r3''s kernel IPv4 forwarding. On this incident
+  it returned ''net.ipv4.ip_forward = 0'' while r3''s filter table was clean (only
+  the 10.0.0.0/8 anti-spoof drop), its SNAT rule was correct and policy routing was
+  empty, which is why r3 pinged 8.8.8.8 itself but r1 and h1 could not get through
+  it. s3''s default route via 10.0.33.0 confirms r3 is the border that actually carries
+  h1''s traffic.'
+trigger: Runs for service/internet, at the beginning of the checks.
+match:
+  tags:
+  - service/internet
+mode: active
+position: beginning
+tags:
+- service/internet
+source:
+  by: ai
+  incident: 20261109T043228Z-h1-internet
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-09T22:35:45'
+steps:
+- id: s1
+  ask: Is IPv4 forwarding off in r3's kernel right now?
+  check:
+    name: output_has
+    args:
+      command: sysctl net.ipv4.ip_forward
+      device: r3
+      text: ip_forward = 0
+  then:
+    found: cause config.forwarding_disabled device=r3
+causes:
+  config.forwarding_disabled: r3's running config drifted to 'no ip forwarding', so
+    net.ipv4.ip_forward is 0 and r3 drops every packet hosts forward through it while
+    still answering pings and holding its NAT rule and return routes.
+end: stop This rule's checks found nothing, so the others carry on.

@@ -1,0 +1,55 @@
+id: injected-netem-loss-fix
+title: Delete the netem loss qdisc from the port
+table: fix
+priority: 100
+description: Delete the netem loss qdisc from the port (suggested by the AI)
+match:
+  cause:
+  - link.deliberate_loss
+  platform: frr
+mode: shadow
+position: main
+tags:
+- link/loss
+source:
+  by: ai
+  incident: 20261109T013337Z-r3-link_eth3
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-08T18:43:44'
+require:
+- change_window_open == closed
+action:
+  do:
+    name: linux_change
+    args:
+      argv:
+      - tc
+      - qdisc
+      - del
+      - dev
+      - '{interface}'
+      - root
+      device: '{device}'
+      undo_argv:
+      - tc
+      - qdisc
+      - add
+      - dev
+      - '{interface}'
+      - root
+      - netem
+      - limit
+      - '1000'
+      - loss
+      - 30%
+verify:
+- check:
+    name: link_loss
+    args:
+      device: '{device}'
+      interface: '{interface}'
+      target: '{neighbor_ip}'
+  expect:
+  - clean
+risk: low

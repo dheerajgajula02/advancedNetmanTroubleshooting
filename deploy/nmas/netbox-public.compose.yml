@@ -1,0 +1,31 @@
+# A second NetBox web front end on the same database, published only through
+# https://nmas.shiplabs.net/ipam/ (nginx on the GCP proxy -> NetBird -> 10.9.8.182:8001).
+# The LAN NetBox (netbox-ipam, :8000, ~/advancedNetman/lab1/netbox) is untouched:
+# automation keeps using http://localhost:8000 with its own logins and tokens.
+#
+#   docker compose -f deploy/nmas/netbox-public.compose.yml -p nmas up -d
+#
+# Secrets (database, Django secret key, the remote-user header name) come from
+# ~/.config/nmas/netbox-public.env (mode 600), written by deploy/nmas/netbox-env.py.
+#
+# The image is pinned to the exact one netbox-ipam runs: a newer NetBox would migrate
+# the shared database on start. Upgrade both together.
+services:
+  netbox-public:
+    image: netboxcommunity/netbox@sha256:b1639229a0cf67052a2d53d7f7df004c840f49c9959a321bf310b6373df7240c
+    pull_policy: never
+    container_name: netbox-public
+    restart: unless-stopped
+    env_file: ${HOME}/.config/nmas/netbox-public.env
+    ports:
+      - "10.9.8.182:8001:8080"   # NetBird address only; the GCP proxy is the client
+    volumes:
+      - /home/dheeraj/advancedNetman/lab1/netbox/config/extra.py:/etc/netbox/config/extra.py:ro
+      - ./netbox-nmas.py:/etc/netbox/config/nmas.py:ro
+    networks:
+      clab-mgmt:
+        ipv4_address: 172.20.20.55   # next to netbox-ipam (.50-.53) and tacacs (.54); no lab node uses it
+
+networks:
+  clab-mgmt:
+    external: true

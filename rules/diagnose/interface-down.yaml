@@ -1,0 +1,69 @@
+id: interface-down
+title: A port goes down
+table: diagnose
+priority: 100
+description: A port sent a linkDown trap. Confirm it in Prometheus, then work out why it went down.
+trigger: A linkDown trap arrives. The watcher waits two minutes so Prometheus has a clean minute of samples, then starts at the first check.
+match:
+  event: interface.down
+  platform: eos
+mode: active
+position: main
+tags: [link/port]
+source: {by: seed}
+
+steps:
+  # Confirm: does the monitoring agree with the trap?
+  - id: polling
+    phase: confirm
+    ask: Did SNMP polling see the port go down?
+    check: snmp_saw_down {device} {interface}
+    then:
+      up: stop Not confirmed. Polling never saw {interface} down, so it was back within seconds.
+  - id: traffic
+    phase: confirm
+    ask: Did traffic stop crossing the link?
+    check: traffic_stopped {device} {interface}
+    then:
+      flowing: stop Not confirmed. Traffic was flowing again within 90 seconds of the trap, so this was a short flap rather than an outage.
+
+  # Investigate: why did it go down?
+  - id: log
+    ask: What did {device} log when it happened?
+    check: device_log {device} {interface}
+  - id: now
+    ask: Is {interface} still down?
+    check: interface_status {device} {interface}
+    then:
+      up: stop {interface} is back up now. Nothing is left to fix.
+      admin_down: cause interface.admin_shut
+      errdisabled: cause interface.errdisabled
+      not_found: cause interface.missing
+  - id: peer
+    ask: What is on the other end of the link?
+    check: topology_peer {device} {interface}
+    then:
+      none: escalate The cabling inventory has no link on {interface}, so the far end is unknown.
+  - id: peer-device
+    ask: Is {peer_device} up?
+    check: device_up {peer_device}
+    then:
+      down: cause device.down device={peer_device}
+  - id: peer-port
+    ask: Is {peer_interface} on {peer_device} shut down?
+    check: interface_status {peer_device} {peer_interface}
+    then:
+      admin_down: cause interface.far_end_shut far_device={peer_device} far_interface={peer_interface}
+      errdisabled: cause interface.far_end_errdisabled far_device={peer_device} far_interface={peer_interface}
+      not_found: cause interface.missing device={peer_device} interface={peer_interface}
+
+end: cause link.physical_fault
+
+causes:
+  interface.admin_shut: "{interface} on {device} was shut down by hand."
+  interface.errdisabled: "{device} error-disabled {interface} to protect itself, usually after repeated flapping."
+  interface.missing: "{interface} no longer exists on {device}."
+  link.physical_fault: "{interface} on {device} and {peer_interface} on {peer_device} are both enabled, but the link is down. The cable or optics between them are the likely fault."
+  device.down: "The device on the other end, {device}, is down."
+  interface.far_end_shut: "The far end, {far_interface} on {far_device}, was shut down by hand."
+  interface.far_end_errdisabled: "The far end, {far_interface} on {far_device}, is error-disabled."

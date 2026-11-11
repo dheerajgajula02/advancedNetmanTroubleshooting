@@ -1,0 +1,45 @@
+id: unexpected-config-change
+title: A config changes outside a job
+table: diagnose
+priority: 100
+description: A device saved its config. Work out whether anything really changed, and who changed it. Saves that change nothing are logged and not kept as runs.
+trigger: A config-saved trap arrives. Saves from one device are merged until it has been quiet for three minutes, because a job can save a config a hundred times in an hour.
+match:
+  event: config.changed
+  source: [trap, syslog, gnmi, manual]
+  platform: eos
+mode: active
+position: main
+tags: [config/drift]
+quiet_stops: true
+source: {by: seed}
+
+steps:
+  - id: window
+    phase: confirm
+    ask: Was an automation job running when this arrived?
+    check: change_window_open
+    then:
+      open: stop A job held the change lock, so this change was expected.
+  - id: diff
+    phase: confirm
+    ask: Did anything in the config actually change?
+    check: changed_sections {device}
+    then:
+      unchanged: stop {device} saved its config, but nothing in it changed.
+      no_baseline: escalate There is nothing to compare {device}'s config with yet.
+
+  - id: who
+    ask: Who made the change?
+    check: config_author {device}
+    then:
+      automation: cause config.changed_by_automation
+      person: cause config.changed_by_person
+      unknown: cause config.changed_by_unknown
+
+end: escalate {device}'s config changed and the log does not say who did it.
+
+causes:
+  config.changed_by_automation: "{device}'s config changed in {section}. It came from the automation server, but no job held the change lock."
+  config.changed_by_person: "{changed_by} changed {section} on {device}."
+  config.changed_by_unknown: "{device}'s config changed in {section}, made by {changed_by}."

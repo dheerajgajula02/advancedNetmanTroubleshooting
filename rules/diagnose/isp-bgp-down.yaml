@@ -1,0 +1,57 @@
+id: isp-bgp-down
+title: A border router loses BGP to the ISP
+table: diagnose
+priority: 100
+description: A border router's BGP session to the ISP left Established. Check the session, then the uplink and config on our side. R5 itself is out of scope.
+trigger: The one-minute sweep sees a BGP session on r3 or r4 leave Established. The border routers send no BGP traps.
+match:
+  event: bgp.peer_down
+  role: border
+mode: active
+position: main
+tags: [routing/bgp]
+source: {by: seed}
+
+steps:
+  - id: session
+    phase: confirm
+    ask: Is BGP to {peer_ip} still down on {device}?
+    check: bgp_peer_state {device} {peer_ip}
+    then:
+      established: stop Not confirmed. BGP to {peer_ip} is established again, so this was a short flap.
+      admin_shut: cause bgp.admin_shut
+      missing: cause bgp.not_configured
+
+  - id: uplink
+    ask: Which port on {device} faces {peer_ip}?
+    check: neighbor_port {device} {peer_ip}
+    then:
+      none: escalate No port on {device} is in the same subnet as {peer_ip}, so the uplink address may have changed.
+  - id: uplink-port
+    ask: Is the uplink {interface} up?
+    check: interface_status {device} {interface}
+    then:
+      admin_down: cause interface.admin_shut
+      down: cause bgp.uplink_down
+      not_found: cause interface.missing
+  - id: layer2
+    ask: Can {device} still see {peer_ip} on the wire?
+    check: arp_neighbor {device} {peer_ip}
+    then:
+      unreachable: cause bgp.isp_silent
+  - id: config
+    ask: Has the BGP config on {device} changed from its known-good copy?
+    check: known_good_match {device} router_bgp
+    then:
+      drift: cause config.drift
+
+end: escalate BGP to {peer_ip} is {bgp_state} while the uplink works and our config is unchanged. Last reset - {last_reset}. R5 is out of scope, so a person needs to look.
+
+causes:
+  bgp.admin_shut: "BGP to {peer_ip} is shut down in {device}'s config."
+  bgp.not_configured: "{device} has no BGP neighbor {peer_ip} configured any more."
+  bgp.uplink_down: "The uplink {interface} on {device} has no link, so BGP to the ISP cannot run. R5's side is out of scope."
+  bgp.isp_silent: "{interface} is up but nothing answers at {peer_ip}, so the fault looks to be on the ISP's side."
+  interface.admin_shut: "The uplink {interface} on {device} is shut down."
+  interface.missing: "The uplink {interface} no longer exists on {device}."
+  config.drift: "The BGP config on {device} no longer matches its known-good copy, in: {drift_lines}."

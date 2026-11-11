@@ -1,0 +1,18 @@
+id: converge-far-end
+title: Put the far-end device's config back to known-good
+table: fix
+priority: 100
+description: The port on the other end of the link was shut down by hand. Put that device back to its known-good copy.
+match:
+  cause: interface.far_end_shut
+mode: active
+position: main
+tags: [link/port, config/by-person]
+source: {by: seed}
+risk: medium
+require:
+  - change_window_open == closed
+action:
+  do: converge_config {far_device}
+verify:
+  - known_good_match {far_device} managed == match

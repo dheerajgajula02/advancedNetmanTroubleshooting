@@ -1,0 +1,70 @@
+id: bad-link
+title: A link is dropping packets
+table: diagnose
+priority: 100
+description: Pings across a link started failing while its ports stayed up. Measure it properly, then work out whether it is the port, the link or the whole device.
+trigger: The sweep pings across every routed link once a minute, and one lost 20% or more of its pings.
+match:
+  event: link.degraded
+mode: active
+position: main
+tags: [link/loss]
+source: {by: seed}
+
+steps:
+  - id: measure
+    phase: confirm
+    ask: Is the link really losing packets?
+    check: link_loss {device} {interface} {neighbor_ip}
+    then:
+      clean: stop Not confirmed. Only {loss_pct}% of 50 pings were lost, so it has cleared.
+
+  - id: state
+    ask: Is {interface} up on {device}?
+    check: interface_status {device} {interface}
+    then:
+      admin_down: cause interface.admin_shut
+      errdisabled: cause interface.errdisabled
+      not_found: cause interface.missing
+      down: cause interface.no_link
+  - id: peer
+    ask: What is on the other end of the link?
+    check: topology_peer {device} {interface}
+    then:
+      none: escalate The cabling inventory has no link on {interface}, so the far end is unknown.
+  - id: peer-state
+    ask: Is {peer_interface} up on {peer_device}?
+    check: interface_status {peer_device} {peer_interface}
+    then:
+      admin_down: cause interface.far_end_shut far_device={peer_device} far_interface={peer_interface}
+      errdisabled: cause interface.far_end_errdisabled far_device={peer_device} far_interface={peer_interface}
+      not_found: cause interface.missing device={peer_device} interface={peer_interface}
+      down: cause interface.no_link device={peer_device} interface={peer_interface}
+  - id: others
+    ask: Are {device}'s other links clean?
+    check: other_links_clean {device} {interface}
+    then:
+      lossy: cause device.wide_loss
+  - id: counters
+    ask: Is {interface} on {device} counting errors?
+    check: interface_errors {device} {interface} {neighbor_ip}
+    then:
+      errors: cause link.bad_interface
+  - id: far-counters
+    ask: Is {peer_interface} on {peer_device} counting errors?
+    check: interface_errors {peer_device} {peer_interface} {neighbor_ip} {device}
+    then:
+      errors: cause link.bad_interface device={peer_device} interface={peer_interface}
+
+end: cause link.loss_no_errors
+
+causes:
+  interface.admin_shut: "{interface} on {device} is shut down."
+  interface.errdisabled: "{device} error-disabled {interface}."
+  interface.missing: "{interface} no longer exists on {device}."
+  interface.no_link: "{interface} on {device} is enabled but has no link."
+  interface.far_end_shut: "The far end, {far_interface} on {far_device}, is shut down."
+  interface.far_end_errdisabled: "The far end, {far_interface} on {far_device}, is error-disabled."
+  device.wide_loss: "{device} is losing packets on several links, including {interface} and {lossy_links}, so {device} itself is the likely problem."
+  link.bad_interface: "{interface} on {device} is a bad interface. The link is losing {loss_pct}% of packets and the port is counting errors: {error_detail}."
+  link.loss_no_errors: "The link between {interface} on {device} and {peer_interface} on {peer_device} is losing {loss_pct}% of packets. Both ports say they are up, neither counts errors, and nothing in the config explains it. That points at a failing interface, optics or cable on this link."

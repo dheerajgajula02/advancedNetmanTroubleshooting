@@ -1,0 +1,19 @@
+id: restore-border-routes
+title: Put the return routes back
+table: fix
+priority: 100
+description: A border router lost routes its startup script adds. Add back only those routes.
+match:
+  cause: border.routes_missing
+  platform: frr
+mode: active
+position: main
+tags: [routing/route]
+source: {by: seed}
+risk: low
+require:
+  - change_window_open == closed
+action:
+  do: restore_border_routes {device}
+verify:
+  - border_routes_present {device} == present

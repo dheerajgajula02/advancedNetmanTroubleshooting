@@ -1,0 +1,16 @@
+[Unit]
+Description=Network troubleshooter: watches traps and sweeps the network
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=dheeraj
+WorkingDirectory=/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting
+ExecStart=/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting/.venv/bin/python -m ts watch
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting/data/watch.log
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+id: restart-dhcp
+title: Start the DHCP service again
+table: fix
+priority: 100
+description: dnsmasq stopped on the DHCP server. Start it again.
+match:
+  cause: dhcp.daemon_down
+mode: active
+position: main
+tags: [service/dhcp]
+source: {by: seed}
+risk: low
+require:
+  - change_window_open == closed
+action:
+  do: start_dhcp_service
+verify:
+  - dhcp_daemon_running == running

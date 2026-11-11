@@ -1,0 +1,38 @@
+id: route-missing
+title: An important route disappears
+table: diagnose
+priority: 100
+description: A key prefix left a routing table. Check the protocol that used to provide it, then the config behind that protocol.
+trigger: The one-minute sweep sees the default route, a host subnet or the DHCP server's subnet leave a routing table.
+match:
+  event: route.missing
+  platform: [eos, frr]
+mode: active
+position: main
+tags: [routing/route]
+source: {by: seed}
+
+steps:
+  - id: present
+    phase: confirm
+    ask: Is {prefix} still missing on {device}?
+    check: route_present {device} {prefix}
+    then:
+      present: stop Not confirmed. {prefix} is back in the routing table on {device}.
+
+  - id: neighbors
+    ask: Are the {expected_protocol} neighbors on {device} up?
+    check: protocol_neighbors_ok {device} {expected_protocol}
+    then:
+      degraded: cause routing.neighbors_down
+  - id: protocol-config
+    ask: Has the {expected_protocol} config on {device} changed from its known-good copy?
+    check: known_good_match {device} router_{expected_protocol}
+    then:
+      drift: cause config.drift
+
+end: escalate {prefix} is missing on {device} although {expected_protocol} looks healthy and its config is unchanged. A person needs to look.
+
+causes:
+  routing.neighbors_down: "{prefix} is gone because {expected_protocol} on {device} lost: {degraded_detail}."
+  config.drift: "The {expected_protocol} config on {device} no longer matches its known-good copy, in: {drift_lines}."

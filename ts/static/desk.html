@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service Desk</title>
+<style>
+
+/* The service desk, drawn in Netman's look: Netman's tokens and frame (copied from
+   lab4_gui/pages.py, as in base.css), then the desk's own parts. It stays its own
+   app on its own port; only the look is shared. */
+:root {
+  color-scheme: dark;
+  --bg: #0a0b0d; --surface: #101215; --surface-2: #15181c; --surface-3: #1b1f24;
+  --line: rgba(255,255,255,.07); --line-2: rgba(255,255,255,.12);
+  --text: #e6e8eb; --text-2: #b3b9c2; --muted: #7c838d; --faint: #4e545c;
+  --accent: #93b4ff; --accent-soft: rgba(147,180,255,.12);
+  --ok: #5fc493; --warn: #e3b35f; --bad: #ef7672; --info: #93b4ff; --idle: #3b414a;
+  --panel: var(--surface); --panel-2: var(--surface-2);
+  --radius: 12px;
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+  font-size: 14px; line-height: 1.55; letter-spacing: -.003em;
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+::selection { background: var(--accent-soft); }
+code { font-family: var(--mono); font-size: .86em; background: var(--surface-2); border: 1px solid var(--line);
+       padding: .05rem .32rem; border-radius: 5px; color: var(--text-2); }
+
+/* shell: fixed sidebar + content */
+.app { display: grid; grid-template-columns: 236px minmax(0, 1fr); min-height: 100vh; }
+aside.side {
+  position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 1.6rem;
+  padding: 1.35rem 1rem; border-right: 1px solid var(--line); background: #0c0d10;
+}
+.brand { display: flex; align-items: center; gap: .7rem; color: var(--text); padding: 0 .5rem; }
+.brand:hover { text-decoration: none; }
+.brand .mark {
+  width: 26px; height: 26px; border-radius: 8px; flex: none;
+  background: conic-gradient(from 210deg, #93b4ff, #b7a6ff, #5fc493, #93b4ff);
+  mask: radial-gradient(circle at 50% 50%, transparent 5px, #000 5.5px);
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 5px, #000 5.5px);
+}
+.brand b { display: block; font-size: .95rem; font-weight: 600; letter-spacing: -.01em; }
+.brand small { display: block; color: var(--muted); font-size: .72rem; letter-spacing: .01em; }
+nav.tabs { display: flex; flex-direction: column; gap: 1.2rem; }
+nav.tabs .section { display: flex; flex-direction: column; gap: 1px; }
+nav.tabs .section > span {
+  font-size: .66rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint);
+  padding: 0 .65rem .45rem; font-weight: 600;
+}
+nav.tabs a {
+  display: flex; align-items: center; gap: .65rem; padding: .44rem .65rem; border-radius: 8px;
+  color: var(--muted); font-size: .86rem; font-weight: 500; text-decoration: none;
+  transition: color .15s, background .15s;
+}
+nav.tabs a svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
+                 stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+nav.tabs a:hover { color: var(--text); background: var(--surface-2); }
+nav.tabs a[aria-current='page'] { color: var(--text); background: var(--surface-3); }
+nav.tabs a[aria-current='page'] svg { stroke: var(--accent); opacity: 1; }
+.side-foot { margin-top: auto; padding: 0 .65rem; font-size: .72rem; color: var(--faint); line-height: 1.5; }
+.side-foot .live { display: inline-flex; align-items: center; gap: .4rem; color: var(--muted); }
+.side-foot .live i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+                     box-shadow: 0 0 0 3px rgba(95,196,147,.15); }
+main { padding: 2.4rem 2.6rem 4rem; max-width: 1480px; width: 100%; }
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  aside.side { position: sticky; z-index: 30; height: auto; flex-direction: row; align-items: center;
+               gap: 1rem; padding: .7rem 1rem; border-right: 0; border-bottom: 1px solid var(--line);
+               overflow-x: auto; scrollbar-width: none; }
+  aside.side::-webkit-scrollbar { display: none; }
+  .brand small, .side-foot, nav.tabs .section > span { display: none; }
+  nav.tabs, nav.tabs .section { flex-direction: row; gap: 2px; }
+  nav.tabs a { white-space: nowrap; }
+  main { padding: 1.4rem 1rem 3rem; }
+}
+
+/* the desk's names for Netman's colours */
+:root {
+  --page: var(--bg); --card: var(--surface); --soft: var(--surface-2); --ink: var(--text); --ink-2: var(--text-2);
+  --go: var(--accent); --go-hover: #b3caff; --go-text: var(--accent); --go-ink: #0a0b0d; --go-soft: rgba(147,180,255,.08); --go-line: rgba(147,180,255,.24);
+  --blue: var(--accent); --blue-soft: rgba(147,180,255,.1); --green: var(--ok); --green-soft: rgba(95,196,147,.1);
+  --orange: #ef8f6a; --orange-soft: rgba(239,143,106,.1); --grey: var(--muted); --grey-soft: var(--surface-3);
+  --violet: #b7a6ff; --violet-soft: rgba(183,166,255,.1); --amber: var(--warn); --amber-soft: rgba(227,179,95,.07); --amber-line: rgba(227,179,95,.35);
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+h1, h2, h3, p { margin: 0; }
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); border-radius: 6px; }
+[hidden] { display: none !important; }
+.app.bare { grid-template-columns: minmax(0, 1fr); }
+.app.bare aside.side { display: none; }
+nav.tabs a i { margin-left: auto; font-style: normal; font-size: .68rem; font-weight: 600; line-height: 1; padding: .2rem .42rem; border-radius: 6px;
+  background: rgba(227,179,95,.14); color: var(--warn); }
+.side-foot b { display: flex; align-items: center; color: var(--text-2); font-weight: 500; }
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); margin-right: .5rem; flex: none; }
+.dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(95,196,147,.15); } .dot.off { background: var(--bad); box-shadow: 0 0 0 3px rgba(239,118,114,.18); }
+
+main { min-width: 0; max-width: 1320px; }
+.head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.head h1 { font-size: 30px; font-weight: 600; line-height: 1.15; }
+.head p { color: var(--muted); }
+
+/* the line: tickets are worked one at a time, and this is the order */
+.line { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 13px 18px 13px; margin-bottom: 16px; }
+.line h2 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.line ol { list-style: none; margin: 0; padding: 0; display: flex; align-items: center; gap: 0; overflow-x: auto; padding-bottom: 3px; }
+.line li { display: flex; align-items: center; flex: none; }
+.line li + li::before { content: ""; width: 26px; height: 2px; background: var(--line-2); }
+.stop { display: block; text-decoration: none; color: var(--ink); border: 1px solid var(--line-2); border-radius: 8px; padding: 6px 12px 6px; background: var(--soft); max-width: 260px; }
+.stop b { display: block; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stop small { color: var(--muted); font-size: 13px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stop.now { background: var(--go); border-color: var(--go); color: #fff; }
+.stop.now small { color: #cfe6ee; }
+.line .quiet { color: var(--muted); }
+
+.seg { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.seg a { text-decoration: none; color: var(--ink-2); border: 1px solid var(--line-2); background: var(--card); padding: 4px 13px 4px; border-radius: 20px; font-size: 14.5px; }
+.seg a[aria-current=true] { background: var(--ink); border-color: var(--ink); color: var(--page); font-weight: 600; }
+.seg i { font-style: normal; opacity: .65; margin-left: 4px; }
+
+.queue { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.queue li + li { border-top: 1px solid var(--line); }
+.tk { display: grid; grid-template-columns: 62px minmax(0, 1fr) 44px 170px 96px; gap: 14px; align-items: center; padding: 11px 18px 11px; color: inherit; text-decoration: none; }
+.tk:hover { background: var(--soft); }
+.tk .no { color: var(--muted); font-weight: 600; font-size: 14.5px; }
+.tk b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk small { display: block; color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk .when { color: var(--muted); font-size: 14px; text-align: right; }
+.pri { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.pri.P1 { color: var(--orange); }
+.pill { display: inline-block; font-size: 13.5px; font-weight: 600; padding: 2px 10px 2px; border-radius: 13px; white-space: nowrap; }
+.pill.new { background: var(--violet-soft); color: var(--violet); }
+.pill.working { background: var(--go-soft); color: var(--go-text); }
+.pill.confirming { background: var(--blue-soft); color: var(--blue); }
+.pill.workaround { background: var(--amber-soft); color: var(--amber); }
+.pill.solved { background: var(--green-soft); color: var(--green); }
+.pill.no_fault, .pill.closed { background: var(--grey-soft); color: var(--grey); }
+.pill.needs_agent { background: var(--orange-soft); color: var(--orange); }
+/* memory: the agents down the side, one brain open beside them */
+.brains { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 18px; align-items: start; }
+.who-list { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 8px 8px; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.who-list h2 { font-size: 14px; font-weight: 600; color: var(--muted); padding: 0 10px; margin: 2px 0 6px; }
+.who-list ul { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 2px; }
+.who { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 10px 7px; border-radius: 7px; color: var(--ink); text-decoration: none; }
+.who:hover { background: var(--soft); }
+.who[aria-current=page] { background: var(--go-soft); box-shadow: inset 3px 0 0 var(--go-text); }
+.who b { display: block; font-weight: 600; }
+.who small { display: block; color: var(--muted); font-size: 13px; line-height: 1.3; }
+.who i { font-style: normal; font-size: 13.5px; font-weight: 600; color: var(--ink-2); }
+#brain { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; min-width: 0; }
+.brain-head h2 { font-size: 22px; font-weight: 600; }
+.quiet { color: var(--muted); font-size: 14.5px; }
+.brain-part { margin-top: 22px; }
+.brain-part h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; overflow-wrap: anywhere; }
+.brain-part.add summary { font-weight: 600; cursor: pointer; color: var(--go-text); }
+.brain-part.add textarea, .mem-text { width: 100%; min-height: 76px; margin: 10px 0 8px; border: 1px solid var(--line-2); border-radius: 7px; padding: 9px 11px; background: var(--soft); resize: vertical; }
+.uses { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.uses > li > b { font-weight: 600; display: block; margin-bottom: 5px; }
+.stretches { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.how { border-radius: 7px; padding: 4px 10px 4px; background: var(--grey-soft); color: var(--grey); }
+.how b { display: block; font-size: 14px; font-weight: 600; }
+.how small { font-size: 12.5px; opacity: .85; }
+.how.fine { background: var(--green-soft); color: var(--green); }
+.how.slow { background: var(--amber-soft); color: var(--amber); }
+.how.down { background: var(--orange-soft); color: var(--orange); }
+.mem-ask { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.mem-ask input { flex: 1 1 240px; min-width: 0; border: 1px solid var(--line-2); border-radius: 7px; padding: 7px 11px 7px; background: var(--soft); }
+.mems { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--line); }
+.mem { padding: 10px 0 10px; border-bottom: 1px solid var(--line); }
+.mem-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13.5px; }
+.kind { color: var(--go-text); font-weight: 600; }
+.mem-when { color: var(--muted); }
+.mem-body { margin: 3px 0 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.mem-acts { display: flex; gap: 6px; }
+.btn.small { padding: 2px 10px 2px; font-size: 13.5px; }
+@media (max-width: 860px) { .brains { grid-template-columns: minmax(0, 1fr); } .who-list { position: static; max-height: none; } }
+.empty { padding: 34px 20px; text-align: center; color: var(--muted); }
+
+.btn { background: var(--card); border: 1px solid var(--line-2); border-radius: 7px; padding: 6px 14px 6px; font-weight: 600; font-size: 14.5px; }
+.btn:hover { border-color: var(--ink-2); }
+.btn.go { background: var(--go); border-color: var(--go); color: var(--go-ink); }
+.btn.go:hover { background: var(--go-hover); border-color: var(--go-hover); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.danger { color: var(--orange); }
+
+.back { display: inline-block; margin-bottom: 10px; font-size: 14.5px; color: var(--ink-2); }
+.ticket { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; align-items: start; }
+.conv { display: grid; gap: 12px; margin-bottom: 14px; }
+.msg { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 11px 16px 11px; max-width: 760px; }
+.msg header { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; color: var(--muted); margin-bottom: 3px; }
+.msg header b { color: var(--ink); font-weight: 600; }
+.msg .closing { font-style: normal; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.msg p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.desk { background: var(--go-soft); border-color: var(--go-line); margin-left: 28px; }
+.msg.agent { margin-left: 28px; }
+.msg.private { background: var(--amber-soft); border: 1px dashed var(--amber-line); margin-left: 28px; }
+.msg.private header span::before { content: "Only the support team sees this. "; }
+.compose { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; max-width: 788px; }
+.compose textarea, .report textarea, .scen textarea { width: 100%; min-height: 84px; border: 1px solid var(--line-2); border-radius: 7px; padding: 9px 11px; background: var(--soft); resize: vertical; }
+.compose .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.compose label { font-size: 14.5px; color: var(--ink-2); }
+.tside { display: grid; gap: 12px; position: sticky; top: 16px; align-content: start; }
+.box { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px 12px; }
+.box h2 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.stage { font-size: 15px; color: var(--ink-2); margin-top: 6px; }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+dl.who { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 14.5px; }
+dl.who dt { color: var(--muted); } dl.who dd { margin: 0; }
+.trail { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; font-size: 14px; max-height: 44vh; overflow-y: auto; }
+.trail li { display: grid; grid-template-columns: 9px minmax(0, 1fr); gap: 9px; }
+.trail .pip { width: 9px; height: 9px; border-radius: 50%; background: var(--line-2); margin-top: 6px; }
+.trail .ai .pip { background: var(--violet); }
+.trail .bad .pip { background: var(--orange); }
+.trail small { color: var(--muted); display: block; }
+.note { color: var(--muted); font-size: 14px; margin-top: 8px; }
+
+/* the page a member of staff sees */
+.portal { max-width: 680px; margin: 0 auto; padding-top: 3vh; }
+.portal h1 { font-size: clamp(30px, 4.6vw, 42px); font-weight: 600; line-height: 1.1; margin-bottom: 8px; }
+.portal > p { color: var(--ink-2); margin-bottom: 20px; font-size: 18px; }
+.report { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; display: grid; gap: 16px; }
+.report h2 { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.people { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.people label { display: block; border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 12px 7px; cursor: pointer; }
+.people label:has(input:checked) { border-color: var(--go); background: var(--go-soft); }
+.people input { position: absolute; opacity: 0; }
+.people label:has(input:focus-visible) { outline: 3px solid #4aa6c4; }
+.people b { display: block; font-weight: 600; }
+.people small { color: var(--muted); font-size: 13.5px; }
+.err { color: var(--orange); font-size: 14.5px; }
+.status-big { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 17px 22px 17px; margin-bottom: 14px; }
+.status-big h2 { font-size: 24px; font-weight: 600; line-height: 1.2; }
+.status-big p { color: var(--ink-2); margin-top: 3px; }
+.status-big.solved { border-left: 5px solid var(--green); }
+.status-big.needs_agent { border-left: 5px solid var(--orange); }
+.status-big.working, .status-big.new { border-left: 5px solid var(--go); }
+.status-big.confirming { border-left: 5px solid var(--blue); }
+.status-big.workaround { border-left: 5px solid var(--amber); }
+.foot { margin-top: 24px; font-size: 14px; color: var(--muted); text-align: center; }
+
+.scens { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.scen { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 15px 18px 14px; display: grid; gap: 8px; align-content: start; }
+.scen h2 { font-size: 18px; font-weight: 600; line-height: 1.2; }
+.scen .by { color: var(--muted); font-size: 14.5px; }
+.scen .cause { font-size: 14.5px; color: var(--ink-2); }
+.banner { background: var(--amber-soft); border: 1px solid var(--amber-line); border-radius: 10px; padding: 10px 16px 10px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.tblwrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.tbl th { text-align: left; color: var(--muted); font-weight: 400; font-size: 14px; padding: 10px 16px 7px; border-bottom: 1px solid var(--line-2); }
+.tbl td { padding: 9px 16px 9px; border-top: 1px solid var(--line); }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--page); padding: 8px 18px 8px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.toast.on { opacity: 1; }
+.toast.bad { background: var(--orange); }
+
+@media (max-width: 900px) {
+  .ticket { grid-template-columns: minmax(0, 1fr); }
+  .tside { position: static; }
+  .tk { grid-template-columns: minmax(0, 1fr) auto; }
+  .tk .no, .tk .pri { display: none; }
+  .tk .state { grid-column: 1; grid-row: 2; }
+  .tk .when { grid-column: 2; grid-row: 1 / span 2; }
+  .msg.desk, .msg.agent, .msg.private { margin-left: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* ---------- Netman's look on the desk's parts ---------- */
+.head { display: grid; gap: .35rem; margin-bottom: 1.6rem; }
+.head h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -.022em; line-height: 1.2; }
+.head p { color: var(--muted); font-size: .92rem; max-width: 74ch; }
+.line, .queue, #brain, .who-list, .msg, .compose, .box, .report, .status-big, .scen, .tbl { border-radius: var(--radius); }
+.line h2, .box h2, .report h2 { font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+.who-list h2 { font-size: .66rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); }
+.stop { border-radius: 9px; background: var(--surface-2); }
+.stop.now { background: var(--accent-soft); border-color: rgba(147,180,255,.55); color: var(--text); }
+.stop.now small { color: var(--text-2); }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; max-width: 100%; }
+.seg a { border: 0; background: transparent; border-radius: 6px; padding: .32rem .8rem; font-size: .8rem; color: var(--muted); }
+.seg a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.seg a[aria-current=true] { background: var(--surface-3); color: var(--text); font-weight: 500; }
+.tk .no { font-family: var(--mono); font-size: .78rem; font-weight: 500; }
+.tk b { font-weight: 550; }
+.tk small, .tk .when { font-size: .8rem; }
+.pri { font-size: .72rem; font-weight: 600; }
+.pill { display: inline-flex; align-items: center; gap: .4rem; font-size: .74rem; font-weight: 500; padding: .18rem .6rem; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line); }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.new, .pill.working, .pill.confirming, .pill.workaround, .pill.solved, .pill.no_fault, .pill.closed, .pill.needs_agent { background: var(--surface-2); }
+.pill.working { color: var(--accent); }
+.btn { background: transparent; color: var(--text); border: 1px solid var(--line-2); border-radius: 8px; padding: .45rem .95rem; font-size: .84rem; font-weight: 550;
+  transition: background .15s, border-color .15s; }
+.btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--line-2); }
+.btn.go { background: var(--text); color: #0a0b0d; border-color: var(--text); }
+.btn.go:hover:not(:disabled) { background: #fff; border-color: #fff; }
+.btn.danger { color: var(--bad); border-color: rgba(239,118,114,.35); }
+.btn.danger:hover:not(:disabled) { background: rgba(239,118,114,.1); border-color: rgba(239,118,114,.6); }
+.btn:disabled { opacity: .38; cursor: not-allowed; }
+.btn.small { padding: .26rem .7rem; font-size: .78rem; }
+input, textarea, select, .compose textarea, .report textarea, .scen textarea, .brain-part.add textarea, .mem-text, .mem-ask input {
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; color: var(--text); transition: border-color .15s, box-shadow .15s; }
+input:focus, textarea:focus, select:focus { outline: none; border-color: rgba(147,180,255,.55); box-shadow: 0 0 0 3px var(--accent-soft); }
+.msg { padding: .8rem 1rem .75rem; }
+.msg header { font-size: .78rem; }
+.msg.desk { background: var(--go-soft); border-color: var(--go-line); }
+.msg.private { background: var(--amber-soft); border: 1px dashed var(--amber-line); }
+.status-big { border-left-width: 2px; }
+.status-big h2 { font-size: 1.35rem; font-weight: 600; letter-spacing: -.015em; }
+.status-big.solved { border-left: 2px solid var(--ok); } .status-big.needs_agent { border-left: 2px solid var(--orange); }
+.status-big.working, .status-big.new { border-left: 2px solid var(--accent); } .status-big.confirming { border-left: 2px solid var(--accent); }
+.status-big.workaround { border-left: 2px solid var(--warn); }
+.portal h1 { font-size: clamp(1.8rem, 3.6vw, 2.4rem); font-weight: 600; letter-spacing: -.025em; }
+.portal > p { color: var(--muted); font-size: 1rem; }
+.people label { border-radius: 10px; }
+.people label:has(input:checked) { border-color: rgba(147,180,255,.55); background: var(--accent-soft); }
+.people label:has(input:focus-visible) { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.scen h2 { font-size: 1rem; font-weight: 600; letter-spacing: -.01em; }
+.who[aria-current=page] { background: var(--surface-3); box-shadow: none; }
+.brain-head h2 { font-size: 1.25rem; font-weight: 600; letter-spacing: -.015em; }
+.brain-part h3 { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+.tbl th { font-size: .7rem; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); border-bottom: 1px solid var(--line); }
+.tbl td { font-size: .86rem; }
+.toast { background: var(--surface-3); color: var(--text); border: 1px solid var(--line-2); border-left: 2px solid var(--ok); font-size: .86rem; font-weight: 500; box-shadow: 0 12px 32px rgba(0,0,0,.4); }
+.toast.bad { background: var(--surface-3); border-left-color: var(--bad); }
+.banner { border-radius: var(--radius); }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="side">
+    <a class="brand" href="#/"><span class="mark"></span><span><b>Service desk</b><small>Tickets from the people</small></span></a>
+    <nav class="tabs" aria-label="Pages">
+      <div class="section"><span>Desk</span>
+        <a href="#/" data-nav="queue"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v8H3zM3 4l5 4 5-4"/></svg>Tickets <i id="n-open" hidden></i></a>
+        <a href="#/report" data-nav="report"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg>Report a problem</a>
+      </div>
+      <div class="section"><span>Behind the desk</span>
+        <a href="#/scenarios" data-nav="scenarios"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3l9 5-9 5z"/></svg>Scenarios</a>
+        <a href="#/people" data-nav="people"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/></svg>People</a>
+        <a href="#/memory" data-nav="memory"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10v3H3zM3 9h10v3H3zM5.5 5.5h.01M5.5 10.5h.01"/></svg>Memory</a>
+      </div>
+    </nav>
+    <div class="side-foot" id="worker"></div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const WORDS = {new: "In line", working: "Being worked on", confirming: "Waiting for reply", workaround: "Working for now", solved: "Solved", no_fault: "No fault found", needs_agent: "Needs an engineer", closed: "Closed"};
+const OPEN = ["new", "working", "confirming", "workaround", "needs_agent"];
+const FOR_THEM = {
+  new: ["You are in line", "We work tickets one at a time, and yours is coming up."],
+  working: ["We are on it", "We are checking the network from your computer right now."],
+  confirming: ["Can you see it working?", "We have replied below. Please try it and let us know."],
+  workaround: ["Working for now", "This should keep you going. An engineer still has to do the proper repair."],
+  solved: ["This is fixed", "We fixed it and checked it from your computer."],
+  no_fault: ["We could not find a problem", "Everything we can test from your computer is working."],
+  needs_agent: ["An engineer is taking a look", "We could not fix this automatically, so a person has it now."],
+  closed: ["This ticket is closed", "Open a new one if you need more help."],
+};
+// A run in the troubleshooting pages: their own port on the LAN, Netman's section on the public address.
+const CONSOLE = id => `${location.port ? `http://${location.hostname}:8770/` : "/troubleshooting"}#/run/${encodeURIComponent(id)}`;
+const AGENT = "Support";
+let timer = null, toastTimer = null, route = {};
+
+async function api(path) {
+  const r = await fetch(path, {cache: "no-store"});
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "That did not work.");
+  return d;
+}
+async function post(path, body = {}) {
+  const r = await fetch(path, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "That did not work.");
+  return d;
+}
+function toast(text, bad = false) {
+  const t = $("#toast");
+  t.textContent = text;
+  t.className = `toast on ${bad ? "bad" : ""}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = "toast"; }, bad ? 6000 : 2500);
+}
+function ago(moment) {
+  const s = Math.max(0, Date.now() / 1000 - moment);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+const pill = status => `<span class="pill ${esc(status)}">${esc(WORDS[status] || status)}</span>`;
+function setNav(name, bare = false) {
+  document.querySelectorAll("nav.tabs a").forEach(a => a.dataset.nav === name ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"));
+  $("#app").classList.toggle("bare", bare);
+}
+function every(fn, ms = 3000) {
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden) fn().catch(() => {}); }, ms);
+}
+
+/* ---------- the queue ---------- */
+const FILTERS = [["open", "Open", t => OPEN.includes(t.status)], ["needs_agent", "Needs an engineer", t => ["needs_agent", "workaround"].includes(t.status)], ["done", "Solved", t => ["solved", "no_fault", "closed"].includes(t.status)], ["all", "All", () => true]];
+function drawChrome(d) {
+  const open = d.tickets.filter(t => OPEN.includes(t.status)).length;
+  const n = $("#n-open"); n.textContent = open; n.hidden = !open;
+  $("#worker").innerHTML = `<b><span class="dot ${d.worker_alive ? "on" : "off"}"></span>${d.worker_alive ? "Auto-solver running" : "Auto-solver stopped"}</b>${d.worker_alive ? "Works tickets one at a time." : "Tickets will wait until it is back."}`;
+}
+function lineOf(d) {
+  const now = d.tickets.find(t => t.status === "working");
+  const next = d.tickets.filter(t => t.status === "new").sort((a, b) => a.id - b.id);
+  if (!now && !next.length) return `<section class="line"><h2>The line</h2><p class="quiet">Nothing waiting. New tickets start straight away.</p></section>`;
+  const stops = [...(now ? [`<li><a class="stop now" href="#/ticket/${now.id}"><b>T-${now.id} ${esc(now.subject)}</b><small>${esc(now.stage)}</small></a></li>`] : []),
+    ...next.map((t, i) => `<li><a class="stop" href="#/ticket/${t.id}"><b>T-${t.id} ${esc(t.subject)}</b><small>${i === 0 ? "Next" : `Number ${i + 1} in line`}, ${esc(t.name)}</small></a></li>`)];
+  return `<section class="line"><h2>The line</h2><ol>${stops.join("")}</ol></section>`;
+}
+function row(t) {
+  return `<li><a class="tk" href="#/ticket/${t.id}"><span class="no">T-${t.id}</span><span><b>${esc(t.subject)}</b><small>${esc(t.name)}, ${esc(t.team)}, on ${esc(t.host)}</small></span><span class="pri ${esc(t.priority)}">${esc(t.priority)}</span><span class="state">${pill(t.status)}</span><span class="when">${esc(ago(t.updated))}</span></a></li>`;
+}
+function drawQueue(d) {
+  drawChrome(d);
+  const on = route.q.get("show") || "open", f = FILTERS.find(x => x[0] === on) || FILTERS[0];
+  const rows = d.tickets.filter(f[2]);
+  $("#main").innerHTML = `<div class="head"><h1>Tickets</h1></div>${lineOf(d)}
+    <div class="seg">${FILTERS.map(([k, label, test]) => `<a href="#/?show=${k}" aria-current="${k === f[0]}">${label}<i>${d.tickets.filter(test).length}</i></a>`).join("")}</div>
+    ${rows.length ? `<ul class="queue">${rows.map(row).join("")}</ul>` : `<div class="queue empty">${on === "open" ? `No open tickets. <a href="#/report">Report a problem</a> or stage one from <a href="#/scenarios">Scenarios</a>.` : "Nothing here yet."}</div>`}`;
+}
+async function pageQueue() {
+  setNav("queue");
+  document.title = "Tickets";
+  const load = async () => drawQueue(await api("api/desk"));
+  await load();
+  every(load);
+}
+
+/* ---------- one ticket, for the support team ---------- */
+function message(n) {
+  const cls = n.private ? "private" : n.role;
+  return `<article class="msg ${esc(cls)}"><header><b>${esc(n.who)}${n.closing ? `<em class="closing">Closing message</em>` : ""}</b><span>${esc(ago(n.time))}</span></header><p>${esc(n.body)}</p></article>`;
+}
+function trail(run) {
+  if (!run) return `<p class="note">It has not started yet.</p>`;
+  const checks = run.checks.map(c => `<li class="${/fail|down|missing|unreach/i.test(c.outcome || "") ? "bad" : ""}"><span class="pip"></span><div>${esc(c.saw || c.ask)}<small>${esc(c.ask)}</small></div></li>`);
+  const ai = run.ai ? run.ai.calls.filter(c => c.reason).map(c => `<li class="ai"><span class="pip"></span><div>${esc(c.reason)}<small>${esc(c.saw || c.tool)}</small></div></li>`) : [];
+  const kept = run.ai ? run.ai.changes.map(c => `<li class="ai"><span class="pip"></span><div><b>${esc(c.status)}</b> on ${esc(c.device)}: ${esc((c.what || []).join("; "))}</div></li>`) : [];
+  const first = run.first_look ? [["Was it working before?", run.first_look.working], ["Has anything changed?", run.first_look.changed]].map(([q, a]) => `<li><span class="pip"></span><div><b>${esc(q)}</b> ${esc(a)}</div></li>`) : [];
+  return `<ol class="trail">${[...first, ...checks, ...ai, ...kept].join("") || `<li><span class="pip"></span><div>Getting started</div></li>`}</ol>${run.ai && run.ai.root_cause ? `<p class="note"><b>Cause:</b> ${esc(run.ai.root_cause)}</p>` : ""}<p class="note"><a href="${CONSOLE(run.id)}">Open the full run in the console</a></p>`;
+}
+function drawSide(t) {
+  const open = OPEN.includes(t.status);
+  $("#conv").innerHTML = t.notes.map(message).join("");
+  $("#side").innerHTML = `<section class="box">${pill(t.status)} ${t.priority ? `<span class="pri ${esc(t.priority)}">${esc(t.priority)}</span>` : ""}<p class="stage">${esc(t.stage)}${t.place_in_line ? `, number ${t.place_in_line} in line` : ""}</p>${t.checked ? `<p class="note">Checked from ${esc(t.host)} after the fix.</p>` : ""}
+      <div class="acts">${open && !t.assignee ? `<button class="btn" data-do="take" type="button">Take it</button>` : ""}${t.status !== "closed" ? `<button class="btn" data-do="close" type="button">Close ticket</button>` : ""}${!open ? `<button class="btn" data-do="reopen" type="button">Run it again</button>` : ""}</div>${t.assignee ? `<p class="note">${esc(t.assignee)} has this.</p>` : ""}</section>
+    <section class="box"><h2>Who reported it</h2><dl class="who"><dt>Name</dt><dd>${esc(t.name)}</dd><dt>Team</dt><dd>${esc(t.team)}</dd><dt>Where</dt><dd>${esc(t.place)}</dd><dt>Computer</dt><dd>${esc(t.host)}</dd></dl></section>
+    <section class="box"><h2>Investigation</h2>${trail(t.run)}</section>`;
+  document.querySelectorAll("#side [data-do]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await post(`api/tickets/${t.id}/${b.dataset.do}`, {who: AGENT, body: b.dataset.do === "reopen" ? "Run this again, please." : ""}); toast({take: "You have this ticket.", close: "Closed.", reopen: "Back in line."}[b.dataset.do]); await refreshTicket(); }
+    catch (e) { toast(e.message, true); b.disabled = false; }
+  });
+}
+let refreshTicket = async () => {};
+async function pageTicket(id) {
+  setNav("queue");
+  const t = await api(`api/tickets/${id}`);
+  document.title = `T-${t.id} ${t.subject}`;
+  $("#main").innerHTML = `<a class="back" href="#/">Back to tickets</a><div class="head"><h1>${esc(t.subject)}</h1><p>T-${t.id}, opened ${esc(ago(t.created))}</p></div>
+    <div class="ticket"><div><div class="conv" id="conv"></div>
+      <form class="compose" id="say"><label class="sr" for="say-text" hidden>Your message</label><textarea id="say-text" placeholder="Write to ${esc(t.name.split(" ")[0])}, or leave a note for the team"></textarea>
+        <div class="row"><label><input type="checkbox" id="say-private"> Only the support team sees this</label><button class="btn go" type="submit">Send</button></div></form></div>
+      <aside class="tside" id="side"></aside></div>`;
+  drawSide(t);
+  refreshTicket = async () => { const fresh = await api(`api/tickets/${id}`); if (route.path === `ticket/${id}`) drawSide(fresh); };
+  $("#say").onsubmit = async e => {
+    e.preventDefault();
+    try { await post(`api/tickets/${id}/reply`, {who: AGENT, role: "agent", body: $("#say-text").value, private: $("#say-private").checked}); $("#say-text").value = ""; await refreshTicket(); }
+    catch (err) { toast(err.message, true); }
+  };
+  every(refreshTicket);
+}
+
+/* ---------- reporting a problem, as a member of staff ---------- */
+async function pageReport() {
+  setNav("report", true);
+  document.title = "Report a problem";
+  clearInterval(timer);
+  const {people} = await api("api/people");
+  $("#main").innerHTML = `<div class="portal"><h1>What's going wrong?</h1><p>Tell us in your own words. We will check the network from your computer and reply here.</p>
+    <form class="report" id="rep">
+      <div><h2>Who are you?</h2><div class="people" role="radiogroup" aria-label="Who are you">${people.map(p => `<label><input type="radio" name="who" value="${esc(p.id)}"><b>${esc(p.name)}</b><small>${esc(p.team)}, on ${esc(p.host)}</small></label>`).join("")}</div></div>
+      <div><h2><label for="rep-text">The problem</label></h2><textarea id="rep-text" placeholder="For example: I'm not getting internet at my desk"></textarea></div>
+      <p class="err" id="rep-err" hidden></p>
+      <div><button class="btn go" type="submit">Send to the service desk</button></div>
+    </form><p class="foot"><a href="#/">Support team view</a></p></div>`;
+  $("#rep").onsubmit = async e => {
+    e.preventDefault();
+    const who = document.querySelector('input[name="who"]:checked'), err = $("#rep-err");
+    err.hidden = true;
+    try { const made = await post("api/tickets", {person: who ? who.value : "", body: $("#rep-text").value}); location.hash = `#/my/${made.id}`; }
+    catch (x) { err.textContent = x.message.includes("who") || !who ? "Choose who is reporting this." : x.message; err.hidden = false; }
+  };
+}
+async function pageMine(id) {
+  setNav("report", true);
+  let who = "";
+  const answer = async body => {
+    await post(`api/tickets/${id}/reply`, {who, role: "person", body});
+    $("#answer-text").value = "";
+    $("#answer").hidden = true;
+    await draw();
+  };
+  const draw = async () => {
+    const t = await api(`api/my/${id}`), [big, small] = FOR_THEM[t.status] || ["", ""];
+    document.title = big;
+    if (route.path !== `my/${id}`) return;
+    $("#status").className = `status-big ${esc(t.status)}`;
+    $("#status").innerHTML = `<h2>${esc(big)}</h2><p>${esc(t.status === "working" ? t.stage : t.status === "solved" && !t.checked ? "We fixed what we found, but we have no way to test this from your computer. Tell us if it is still wrong." : small)}</p>`;
+    $("#conv").innerHTML = t.notes.map(message).join("");
+    $("#again").hidden = !["solved", "no_fault"].includes(t.status);
+    $("#answer").hidden = !t.waiting_note;
+    $("#quick").hidden = t.status !== "confirming";
+    who = t.name;
+  };
+  $("#main").innerHTML = `<div class="portal"><p style="margin-bottom:6px"><a href="#/report">Report something else</a></p><section class="status-big" id="status"></section><div class="conv" id="conv"></div>
+    <form class="compose" id="answer" hidden><label for="answer-text"><b>Your reply</b></label><textarea id="answer-text" placeholder="Tell us what you are seeing"></textarea><div class="row"><span class="acts" id="quick" style="margin:0"><button class="btn" type="button" data-says="Yes, it is working now.">Yes, it is working</button><button class="btn" type="button" data-says="No, it is still not working.">No, still not working</button></span><button class="btn go" type="submit">Send</button></div></form>
+    <form class="compose" id="again" hidden><label for="again-text"><b>Is it still not working?</b></label><textarea id="again-text" placeholder="Tell us what you are seeing now"></textarea><div class="row"><span></span><button class="btn go" type="submit">It is still not working</button></div></form>
+    <p class="foot"><a href="#/">Support team view</a></p></div>`;
+  $("#again").onsubmit = async e => {
+    e.preventDefault();
+    try { await post(`api/tickets/${id}/reopen`, {who: "You", body: $("#again-text").value}); $("#again-text").value = ""; await draw(); }
+    catch (x) { toast(x.message, true); }
+  };
+  $("#answer").onsubmit = async e => {
+    e.preventDefault();
+    try { await answer($("#answer-text").value); }
+    catch (x) { toast(x.message, true); }
+  };
+  document.querySelectorAll("#quick [data-says]").forEach(b => b.onclick = async () => {
+    try { await answer(b.dataset.says); }
+    catch (x) { toast(x.message, true); }
+  });
+  await draw();
+  every(draw);
+}
+
+/* ---------- staged situations ---------- */
+async function pageScenarios() {
+  setNav("scenarios");
+  document.title = "Scenarios";
+  const [d, {people}, desk] = await Promise.all([api("api/scenarios"), api("api/people"), api("api/desk")]);
+  drawChrome(desk);
+  if (d.current && !d.current.ticket) every(pageScenarios); else clearInterval(timer);
+  const who = id => people.find(p => p.id === id) || {};
+  $("#main").innerHTML = `<div class="head"><h1>Scenarios</h1><p>Each one really breaks the network and puts things back once the ticket is settled. Send the ticket yourself, or let the person find the problem at their own computer and write in.</p></div>
+    ${d.current ? `<div class="banner"><span>${d.current.ticket ? `A scenario is staged, for <a href="#/ticket/${d.current.ticket}">ticket T-${d.current.ticket}</a>.` : "A scenario is staged. If the person notices, their ticket will appear here."}</span><button class="btn" id="end" type="button">Put the network back now</button></div>` : ""}
+    ${d.blocked && !d.current ? `<div class="banner"><span>Staging is paused: ${esc(d.blocked)}.</span></div>` : ""}
+    ${d.last_noticed && !d.last_noticed.ticket && !d.current ? `<div class="banner"><span>${esc(d.last_noticed.said)} No ticket was raised, and the network has been put back.</span></div>` : ""}
+    <div class="scens">${d.scenarios.map(s => { const p = who(s.person); return `<article class="scen"><h2>${esc(s.title)}</h2><p class="by">${esc(p.name)}, ${esc(p.team)}, on ${esc(p.host)}</p><p class="cause">${esc(s.what)}</p><textarea id="t-${esc(s.id)}" aria-label="The ticket ${esc(p.name)} writes">${esc(s.ticket)}</textarea><div class="acts" style="margin:0"><button class="btn go" type="button" data-stage="${esc(s.id)}" ${d.current || d.blocked ? "disabled" : ""}>Break it and send this ticket</button><button class="btn" type="button" data-notice="${esc(s.id)}" ${d.current || d.blocked ? "disabled" : ""}>Break it and let ${esc((p.name || "them").split(" ")[0])} notice</button></div></article>`; }).join("")}</div>`;
+  document.querySelectorAll("[data-notice]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Breaking it";
+    try { await post(`api/scenarios/${b.dataset.notice}/stage`, {they_notice: true}); toast("Broken. Now it is up to them to notice."); pageScenarios(); }
+    catch (e) { toast(e.message, true); pageScenarios(); }
+  });
+  document.querySelectorAll("[data-stage]").forEach(b => b.onclick = async () => {
+    b.disabled = true; b.textContent = "Breaking it";
+    try { const made = await post(`api/scenarios/${b.dataset.stage}/stage`, {body: $(`#t-${b.dataset.stage}`).value}); location.hash = `#/ticket/${made.id}`; }
+    catch (e) { toast(e.message, true); pageScenarios(); }
+  });
+  if ($("#end")) $("#end").onclick = async () => { try { await post("api/scenarios/end"); toast("The network is back as it was."); pageScenarios(); } catch (e) { toast(e.message, true); } };
+}
+
+/* ---------- people ---------- */
+async function pagePeople() {
+  setNav("people");
+  document.title = "People";
+  clearInterval(timer);
+  const [{people}, d] = await Promise.all([api("api/people"), api("api/desk")]);
+  drawChrome(d);
+  const open = id => d.tickets.filter(t => t.person === id && OPEN.includes(t.status)).length;
+  $("#main").innerHTML = `<div class="head"><h1>People</h1><p>Who sits where, so a ticket starts from the right computer.</p></div>
+    <div class="tblwrap"><table class="tbl"><thead><tr><th>Name</th><th>Team</th><th>Where</th><th>Computer</th><th>Open tickets</th></tr></thead><tbody>${people.map(p => `<tr><td><a href="#/memory/${esc(p.id)}">${esc(p.name)}</a></td><td>${esc(p.team)}</td><td>${esc(p.where)}</td><td>${esc(p.host)}</td><td>${open(p.id) || "None"}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+/* ---------- what each agent remembers ---------- */
+const KIND_WORDS = {use: "Their usual work", did: "Did", said: "Said", heard: "Heard", outcome: "How it turned out", triaged: "Sorted a ticket", told: "Wrote to someone", judged: "Judged a reply", note: "Note on a run", read: "Read a run", added: "Added by you"};
+const HOW_TONE = {fine: "fine", slow: "slow", "dropping out": "slow", "not working": "down"};
+const memoryView = {kind: "", asked: ""};
+const whenWords = moment => new Date(moment * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"});
+function agentLink(a, on) {
+  return `<li><a class="who" href="#/memory/${esc(a.id)}" ${a.id === on ? 'aria-current="page"' : ""}><span><b>${esc(a.name)}</b><small>${esc(a.about)}</small></span><i>${a.count}</i></a></li>`;
+}
+function stretchChip(s) {
+  const span = s.times > 1 ? `${whenWords(s.first)} to ${whenWords(s.last)}` : whenWords(s.first);
+  return `<li class="how ${HOW_TONE[s.how] || ""}"><b>${esc(s.how)}</b><small>${esc(span)}, ${s.times} ${s.times === 1 ? "time" : "times"}</small></li>`;
+}
+function memoryRow(m) {
+  return `<li class="mem" data-mem="${m.id}"><div class="mem-top"><span class="kind">${esc(KIND_WORDS[m.kind] || m.kind)}</span><span class="mem-when">${esc(whenWords(m.time))}, ${esc(ago(m.time))}</span></div><p class="mem-body">${esc(m.body)}</p>
+    <div class="mem-acts"><button class="btn small" type="button" data-edit="${m.id}">Edit</button><button class="btn small danger" type="button" data-forget="${m.id}">Forget</button></div></li>`;
+}
+function drawBrain(b) {
+  const kinds = Object.entries(b.kinds).sort((x, y) => y[1] - x[1]);
+  const stretches = Object.entries(b.stretches);
+  const asked = b.asked;
+  return `<header class="brain-head"><h2>${esc(b.agent.name)}</h2><p>${esc(b.agent.about)}</p><p class="quiet">${b.count ? `${b.count} ${b.count === 1 ? "memory" : "memories"}, the latest ${esc(ago(b.latest))}.` : "Nothing remembered yet."}</p></header>
+    ${b.agent.uses.length ? `<section class="brain-part"><h3>Their usual work</h3>${stretches.length ? `<ul class="uses">${stretches.map(([what, list]) => `<li><b>${esc(what)}</b><ol class="stretches">${list.slice(-5).map(stretchChip).join("")}</ol></li>`).join("")}</ul>` : `<p class="quiet">They use ${esc(b.agent.uses.join(", "))}. How it goes will show up here as they work.</p>`}</section>` : ""}
+    <section class="brain-part"><h3>Ask their memory</h3><form id="mem-ask" class="mem-ask"><input id="mem-q" type="search" aria-label="What to look for in their memory" placeholder="Did the website work earlier?" value="${esc(asked)}"><button class="btn go" type="submit">Search</button>${asked ? `<button class="btn" type="button" id="mem-clear">Show everything</button>` : ""}</form>
+      <p class="quiet">This finds what the agent itself would remember, by words and by meaning.</p></section>
+    <details class="brain-part add"><summary>Add something for them to remember</summary><textarea id="mem-new" aria-label="What they should remember" placeholder="Write it the way they would remember it."></textarea><button class="btn go" type="button" id="mem-add">Add to memory</button></details>
+    <section class="brain-part"><h3>${asked ? `What comes to mind for "${esc(asked)}"` : "What they remember"}</h3>
+      ${asked || !kinds.length ? "" : `<div class="seg"><a href="#" data-kind="" aria-current="${!memoryView.kind}">Everything<i>${b.count}</i></a>${kinds.map(([k, n]) => `<a href="#" data-kind="${esc(k)}" aria-current="${memoryView.kind === k}">${esc(KIND_WORDS[k] || k)}<i>${n}</i></a>`).join("")}</div>`}
+      ${b.memories.length ? `<ul class="mems">${b.memories.map(memoryRow).join("")}</ul>` : `<div class="queue empty">${asked ? "Nothing comes to mind for that." : "Nothing here yet. It fills up as this agent works, or add something above."}</div>`}</section>`;
+}
+function wireBrain(id, redraw) {
+  const pane = $("#brain");
+  $("#mem-ask").onsubmit = e => { e.preventDefault(); memoryView.asked = $("#mem-q").value.trim(); redraw(); };
+  if ($("#mem-clear")) $("#mem-clear").onclick = () => { memoryView.asked = ""; redraw(); };
+  pane.querySelectorAll("[data-kind]").forEach(a => a.onclick = e => { e.preventDefault(); memoryView.kind = a.dataset.kind; redraw(); });
+  $("#mem-add").onclick = async () => {
+    try { await post(`api/brains/${id}`, {body: $("#mem-new").value}); toast("Added to their memory."); redraw(); }
+    catch (e) { toast(e.message, true); }
+  };
+  pane.querySelectorAll("[data-forget]").forEach(b => b.onclick = async () => {
+    if (b.dataset.sure !== "1") { b.dataset.sure = "1"; b.textContent = "Forget for good"; return; }
+    try { await post(`api/brains/${id}/${b.dataset.forget}/forget`); toast("Forgotten."); redraw(); }
+    catch (e) { toast(e.message, true); }
+  });
+  pane.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+    const row = b.closest(".mem"), body = row.querySelector(".mem-body"), acts = row.querySelector(".mem-acts");
+    body.outerHTML = `<textarea class="mem-text" aria-label="Edit this memory">${esc(body.textContent)}</textarea>`;
+    acts.innerHTML = `<button class="btn small go" type="button" data-save>Save</button><button class="btn small" type="button" data-cancel>Cancel</button>`;
+    acts.querySelector("[data-cancel]").onclick = redraw;
+    acts.querySelector("[data-save]").onclick = async () => {
+      try { await post(`api/brains/${id}/${b.dataset.edit}/edit`, {body: row.querySelector(".mem-text").value}); toast("Saved."); redraw(); }
+      catch (e) { toast(e.message, true); }
+    };
+  });
+}
+async function pageMemory(agentId) {
+  setNav("memory");
+  document.title = "Memory";
+  clearInterval(timer);
+  const [{agents}, d] = await Promise.all([api("api/brains"), api("api/desk")]);
+  drawChrome(d);
+  const chosen = agents.find(a => a.id === agentId) || agents[0];
+  if (chosen.id !== memoryView.id) Object.assign(memoryView, {id: chosen.id, kind: "", asked: ""});
+  const group = g => agents.filter(a => a.group === g);
+  $("#main").innerHTML = `<div class="head"><h1>Memory</h1><p>Each agent has its own memory and can only reach its own. Anything changed here is what that agent remembers from now on.</p></div>
+    <div class="brains"><nav class="who-list" aria-label="Agents"><h2>At the computers</h2><ul>${group("computer").map(a => agentLink(a, chosen.id)).join("")}</ul><h2>On the support side</h2><ul>${group("support").map(a => agentLink(a, chosen.id)).join("")}</ul></nav><div id="brain"></div></div>`;
+  const redraw = async () => {
+    const q = new URLSearchParams(memoryView.asked ? {q: memoryView.asked} : memoryView.kind ? {kind: memoryView.kind} : {});
+    $("#brain").innerHTML = drawBrain(await api(`api/brains/${chosen.id}?${q}`));
+    wireBrain(chosen.id, redraw);
+  };
+  await redraw();
+}
+
+/* ---------- getting around ---------- */
+async function go() {
+  const [path, query] = location.hash.replace(/^#\/?/, "").split("?");
+  route = {path, q: new URLSearchParams(query || "")};
+  const ticket = path.match(/^ticket\/(\d+)$/), mine = path.match(/^my\/(\d+)$/);
+  try {
+    if (ticket) await pageTicket(ticket[1]);
+    else if (mine) await pageMine(mine[1]);
+    else if (path === "report") await pageReport();
+    else if (path === "scenarios") await pageScenarios();
+    else if (path === "people") await pagePeople();
+    else if (path === "memory" || path.startsWith("memory/")) await pageMemory(path.split("/")[1]);
+    else await pageQueue();
+  } catch (e) {
+    clearInterval(timer);
+    $("#main").innerHTML = `<div class="queue empty">${esc(e.message)} <a href="#/">Back to tickets</a></div>`;
+  }
+}
+addEventListener("hashchange", go);
+go();
+</script>
+</body>
+</html>

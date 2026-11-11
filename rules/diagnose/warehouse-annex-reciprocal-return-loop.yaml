@@ -1,0 +1,81 @@
+id: warehouse-annex-reciprocal-return-loop
+title: Warehouse annex internet fails when r4 and r6 point its return route at each
+  other
+table: diagnose
+priority: 100
+description: For a host on 10.10.10.224/28 that cannot reach the internet, confirm
+  the exact r4 kernel override and r6 reciprocal next hop before deleting only the
+  looping override. The routing owner must correct the source that re-adds this route;
+  do not alter the independent T-11 link protections.
+trigger: Runs for service/internet, routing/route, at the end of the checks.
+match:
+  tags:
+  - service/internet
+  - routing/route
+mode: active
+position: end
+tags:
+- service/internet
+- routing/route
+source:
+  by: ai
+  incident: 20261110T045646Z-h6-ticket
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-09T22:25:33'
+steps:
+- id: s1
+  ask: Is the reporting host on the affected warehouse annex?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: ip route
+      text: 10.10.10.224/28 dev eth1
+  then:
+    absent: stop This host is not on the affected warehouse annex.
+    error: escalate Could not read the reporting host's route.
+    unsupported: stop This device does not support the warehouse host route check.
+- id: s2
+  ask: Does internet reachability from the affected host currently fail?
+  check:
+    name: ping
+    args:
+      device: '{device}'
+      target: 8.8.8.8
+  then:
+    reachable: stop The warehouse internet failure is not currently reproduced.
+    error: escalate Could not test internet reachability from the reporting host.
+    unsupported: stop Cannot verify forwarded traffic from this reporting device.
+- id: s3
+  ask: Does r4 have the exact kernel override that sends warehouse replies toward
+    r6?
+  check:
+    name: output_has
+    args:
+      device: r4
+      command: ip route
+      text: 10.10.10.224/28 via 10.0.46.2 dev eth4
+  then:
+    absent: stop The known looping kernel override is absent.
+    error: escalate Could not inspect r4's kernel routes.
+    unsupported: stop Cannot inspect the required r4 kernel route.
+- id: s4
+  ask: Does r6 send the same warehouse prefix straight back to r4?
+  check:
+    name: output_has
+    args:
+      device: r6
+      command: show ip route 10.10.10.224/28
+      text: via 10.0.46.1, Ethernet1
+  then:
+    found: cause routing.forwarding_loop device=r4
+    absent: stop The reciprocal r6 next hop is absent; do not delete the r4 route
+      on this evidence.
+    error: escalate Could not inspect r6's reciprocal route.
+    unsupported: stop Cannot confirm the reciprocal return loop.
+causes:
+  routing.forwarding_loop: A more-specific kernel return route on r4 sends warehouse
+    traffic to r6, whose route sends it back to r4, preventing internet replies from
+    reaching the warehouse host.
+end: stop This rule's checks found nothing, so the others carry on.

@@ -1,0 +1,19 @@
+id: converge-both-ends
+title: Put both ends of the link back to known-good
+table: fix
+priority: 100
+description: The two ends of an OSPF link disagree. Put both devices back to their known-good copies.
+match:
+  cause: ospf.params_mismatch
+mode: active
+position: main
+tags: [routing/ospf, config/drift]
+source: {by: seed}
+risk: medium
+require:
+  - change_window_open == closed
+action:
+  do: converge_config {device} {peer_device}
+verify:
+  - known_good_match {device} managed == match
+  - known_good_match {peer_device} managed == match

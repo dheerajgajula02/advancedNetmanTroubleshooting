@@ -1,0 +1,48 @@
+id: dhcp-service-stopped-known-first
+title: 'DHCP device gets no address: check dnsmasq is running before trusting ''the
+  host still holds its address'''
+table: diagnose
+priority: 100
+description: 'When a device reports it was given no address (typically a new laptop
+  joining the network), check that dnsmasq is actually running on the DHCP server.
+  This runs at the beginning so the daemon state is settled before the address-held
+  step that closed this incident. The sizeable caveat it fixes: a host that already
+  holds a lease keeps it after dnsmasq dies, so ''device still holds its reserved
+  address -> ok'' is not evidence that any new device can obtain one. The remedy for
+  the found cause is the fix that already exists for dhcp.daemon_down (restart-dhcp),
+  so no new fix entry is added here.'
+trigger: Runs for service/dhcp, at the beginning of the checks.
+match:
+  tags:
+  - service/dhcp
+mode: active
+position: beginning
+tags:
+- service/dhcp
+source:
+  by: ai
+  incident: 20261109T051556Z-h4-DHCP
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-09T22:25:27'
+steps:
+- id: s1
+  ask: Does the DHCP server itself answer on its console?
+  check:
+    name: device_up
+    args:
+      device: dhcp-Server
+  then:
+    down: escalate DHCP server dhcp-Server is not answering on its console
+- id: s2
+  ask: Is the DHCP service (dnsmasq) actually running on the DHCP server?
+  check:
+    name: dhcp_daemon_running
+    args: {}
+  then:
+    stopped: cause dhcp.daemon_down
+causes:
+  dhcp.daemon_down: dnsmasq is not running on the DHCP server, so any newly attached
+    device gets no address while hosts that already hold leases keep working and every
+    address-held check passes.
+end: stop This rule's checks found nothing, so the others carry on.

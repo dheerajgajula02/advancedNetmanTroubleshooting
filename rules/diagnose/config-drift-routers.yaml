@@ -1,0 +1,35 @@
+id: config-drift-routers
+title: A device's config drifts
+table: diagnose
+priority: 100
+description: The sweep compares every device with its known-good copy. Whatever it finds differing is put back here, on routers and switches alike, because a switch only sends a trap when someone saves. Runs that end in no difference are not kept.
+trigger: The sweep compares each device with its known-good copy every few minutes, and this one no longer matched.
+match:
+  event: config.changed
+  source: health
+  platform: [frr, eos]
+mode: active
+position: main
+tags: [config/drift]
+quiet_stops: true
+source: {by: seed}
+
+steps:
+  - id: window
+    phase: confirm
+    ask: Was an automation job running when this arrived?
+    check: change_window_open
+    then:
+      open: stop A job held the change lock, so this change was expected.
+  - id: diff
+    phase: confirm
+    ask: Does {device} still differ from its known-good copy?
+    check: known_good_match {device} managed
+    then:
+      match: stop {device} matches its known-good copy again.
+      no_copy: escalate There is nothing to compare {device}'s config with.
+
+end: cause config.drift section=routing
+
+causes:
+  config.drift: "The {section} config on {device} no longer matches its known-good copy, in: {drift_lines}."

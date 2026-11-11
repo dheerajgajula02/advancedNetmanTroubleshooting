@@ -1,0 +1,18 @@
+id: converge-gateway
+title: Put the host's gateway switch back to known-good
+table: fix
+priority: 100
+description: A host lost DHCP because its switch port was shut or its gateway lost the DHCP relay. Put that switch back to its known-good copy.
+match:
+  cause: [dhcp.port_shut, dhcp.relay_missing]
+mode: active
+position: main
+tags: [service/dhcp, config/drift]
+source: {by: seed}
+risk: medium
+require:
+  - change_window_open == closed
+action:
+  do: converge_config {peer_device}
+verify:
+  - known_good_match {peer_device} managed == match

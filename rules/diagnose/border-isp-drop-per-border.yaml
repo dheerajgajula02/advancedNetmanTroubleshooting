@@ -1,0 +1,55 @@
+id: border-isp-drop-per-border
+title: Border router FORWARD chain drops everything out its ISP port (r3 and r4 checked
+  separately)
+table: diagnose
+priority: 100
+description: 'Checks both border routers'' filter tables for the blanket ''-o eth1
+  -j DROP'' rule and, when one has it, names that router in the cause so the repair
+  runs on the border that actually has the rule and is verified from the alarmed host.
+  This incident: r3 was clean, r4 carried h3''s traffic (h3 -> s2 -> r2 -> r4) and
+  had ''-A FORWARD -o eth1 -j DROP'' first in its chain, while both borders still
+  pinged 8.8.8.8 for themselves. The existing border-forward-drop-isp rule is shadowed
+  and reported nothing here; this version reads each border separately and never assumes
+  r4.'
+trigger: Runs for service/internet, at the beginning of the checks.
+match:
+  tags:
+  - service/internet
+mode: active
+position: beginning
+tags:
+- service/internet
+source:
+  by: ai
+  incident: 20261109T045407Z-h3-internet
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-09T22:35:49'
+steps:
+- id: s1
+  ask: Does r3's FORWARD chain still drop every packet it forwards out its ISP port
+    eth1?
+  check:
+    name: output_has
+    args:
+      command: iptables -S
+      device: r3
+      text: -o eth1 -j DROP
+  then:
+    found: cause firewall.forward_dropped_isp device=r3
+- id: s2
+  ask: Does r4's FORWARD chain still drop every packet it forwards out its ISP port
+    eth1?
+  check:
+    name: output_has
+    args:
+      command: iptables -S
+      device: r4
+      text: -o eth1 -j DROP
+  then:
+    found: cause firewall.forward_dropped_isp device=r4
+causes:
+  firewall.forward_dropped_isp: A border router's FORWARD chain drops every packet
+    it forwards out its ISP port, so hosts behind it get no internet even though the
+    router itself can ping 8.8.8.8.
+end: stop This rule's checks found nothing, so the others carry on.

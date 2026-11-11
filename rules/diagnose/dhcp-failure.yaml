@@ -1,0 +1,70 @@
+id: dhcp-failure
+title: A host loses its DHCP address
+table: diagnose
+priority: 100
+description: A host lost an address the DHCP server reserves for it, or the DHCP service stopped. Check the server, the access port, the relay and the path to the server.
+trigger: The one-minute sweep sees a host without its reserved address, or dnsmasq stop on the DHCP server.
+match:
+  event: dhcp.failure
+  platform: linux
+mode: active
+position: main
+tags: [service/dhcp]
+source: {by: seed}
+
+steps:
+  - id: lease
+    phase: confirm
+    ask: Is {device} still missing what it should have?
+    check: dhcp_lease_state {device}
+    then:
+      ok: stop Not confirmed. {device} is back to normal.
+      no_reservation: cause dhcp.no_reservation
+
+  - id: server
+    ask: Is the DHCP server up?
+    check: device_up dhcp-Server
+    then:
+      down: cause dhcp.server_down
+  - id: daemon
+    ask: Is the DHCP service running on the server?
+    check: dhcp_daemon_running
+    then:
+      stopped: cause dhcp.daemon_down
+  - id: access-port
+    ask: Which switch port is {device} plugged into?
+    check: topology_peer {device} eth1
+    then:
+      none: escalate The cabling inventory has no link for {device}, so its switch port is unknown.
+  - id: port-state
+    ask: Is {peer_interface} up on {peer_device}?
+    check: interface_status {peer_device} {peer_interface}
+    then:
+      admin_down: cause dhcp.port_shut
+      down: cause dhcp.port_down
+  - id: vlan
+    ask: Which VLAN is {peer_interface} in?
+    check: port_vlan {peer_device} {peer_interface}
+    then:
+      none: escalate {peer_interface} on {peer_device} is not an access port, so its gateway is unknown.
+  - id: relay
+    ask: Is {gateway_interface} on {peer_device} passing DHCP to the server?
+    check: dhcp_relay_configured {peer_device} {gateway_interface}
+    then:
+      absent: cause dhcp.relay_missing
+  - id: path
+    ask: Can {peer_device} reach the DHCP server?
+    check: ping {peer_device} 10.0.99.1
+    then:
+      unreachable: cause dhcp.server_unreachable
+
+end: escalate The server is up, the relay is set and the path works, but {device} still has no address. A person needs to look.
+
+causes:
+  dhcp.no_reservation: "The DHCP server has no reservation for {device}."
+  dhcp.server_down: "The DHCP server is down."
+  dhcp.daemon_down: "The dnsmasq service is not running on the DHCP server."
+  dhcp.port_shut: "{device}'s switch port, {peer_interface} on {peer_device}, is shut down."
+  dhcp.port_down: "{device}'s switch port, {peer_interface} on {peer_device}, has no link."
+  dhcp.relay_missing: "{gateway_interface} on {peer_device} has no DHCP relay, so requests never reach the server."
+  dhcp.server_unreachable: "{peer_device} cannot reach the DHCP server at 10.0.99.1."

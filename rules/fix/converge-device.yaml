@@ -1,0 +1,18 @@
+id: converge-device
+title: Put the device's config back to known-good
+table: fix
+priority: 100
+description: Someone or something changed routing or interface config by hand. Put that device back to its known-good copy.
+match:
+  cause: [config.drift, config.changed_by_person, config.changed_by_unknown, ospf.passive, ospf.not_enabled, rip.passive, rip.not_enabled, bgp.admin_shut, bgp.not_configured, device.restarted_drifted, interface.admin_shut]
+mode: active
+position: main
+tags: [config/drift]
+source: {by: seed}
+risk: medium
+require:
+  - change_window_open == closed
+action:
+  do: converge_config {device}
+verify:
+  - known_good_match {device} managed == match

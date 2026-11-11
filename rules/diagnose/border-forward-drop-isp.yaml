@@ -1,0 +1,50 @@
+id: border-forward-drop-isp
+title: Border router FORWARD chain drops all traffic out its ISP port
+table: diagnose
+priority: 100
+description: A border router carries an extra "-A FORWARD -o eth1 -j DROP" (eth1 is
+  its ISP-facing port toward r5). It drops every packet the router forwards out to
+  the internet, so hosts behind it get no internet even though the router itself can
+  still ping 8.8.8.8, NAT and return routes are present. Remove only that line; the
+  legitimate anti-spoof rule "-A FORWARD -d 10.0.0.0/8 -i eth1 -j DROP" must stay.
+  Check both r3 and r4, because the fault alternates between the two borders.
+trigger: Runs for service/internet, at the beginning of the checks.
+match:
+  tags:
+  - service/internet
+mode: shadow
+position: beginning
+tags:
+- service/internet
+source:
+  by: ai
+  incident: 20261109T001637Z-h1-internet
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-08T18:43:49'
+steps:
+- id: s1
+  ask: Does r3 drop every packet it forwards out its ISP port eth1?
+  check:
+    name: output_has
+    args:
+      device: r3
+      command: iptables -S
+      text: -A FORWARD -o eth1 -j DROP
+  then:
+    found: cause firewall.forward_dropped_isp device=r3
+- id: s2
+  ask: Does r4 drop every packet it forwards out its ISP port eth1?
+  check:
+    name: output_has
+    args:
+      device: r4
+      command: iptables -S
+      text: -A FORWARD -o eth1 -j DROP
+  then:
+    found: cause firewall.forward_dropped_isp device=r4
+causes:
+  firewall.forward_dropped_isp: A border router's FORWARD chain drops every packet
+    it forwards out its ISP port, so hosts behind it get no internet even though the
+    router itself can ping out.
+end: stop This rule's checks found nothing, so the others carry on.

@@ -1,0 +1,59 @@
+id: vrrp-gateway
+title: The gateway moves to the other switch
+table: diagnose
+priority: 100
+description: A switch took over as VRRP master for a gateway. Check who holds it now and, if it stayed on the wrong switch, why the usual one gave it up.
+trigger: A VRRP new-master trap arrives. Traps for the same gateway within two minutes count as one event, because a takeover and a takeback arrive seconds apart.
+match:
+  event: vrrp.master_change
+  role: access
+mode: active
+position: main
+tags: [switching/vrrp]
+source: {by: seed}
+
+steps:
+  - id: masters
+    phase: confirm
+    ask: Who is master for {interface} now?
+    check: vrrp_state {device} {interface}
+    then:
+      normal: stop Not confirmed. {expected_master} is master for {interface} again, so the gateway moved and came back.
+      both_master: cause vrrp.split_brain
+      no_master: cause vrrp.no_master
+      not_found: cause vrrp.not_configured
+
+  - id: usual-device
+    ask: Is {expected_master}, the usual master, up?
+    check: device_up {expected_master}
+    then:
+      down: cause device.down device={expected_master}
+  - id: usual-gateway
+    ask: Is {interface} up on {expected_master}?
+    check: interface_status {expected_master} {interface}
+    then:
+      admin_down: cause interface.admin_shut device={expected_master}
+      down: cause interface.no_link device={expected_master}
+      not_found: cause interface.missing device={expected_master}
+  - id: usual-config
+    ask: Has the VRRP config on {expected_master} changed from its known-good copy?
+    check: known_good_match {expected_master} vrrp
+    then:
+      drift: cause config.drift device={expected_master} section=VRRP
+  - id: other-config
+    ask: Has the VRRP config on {current_master} changed from its known-good copy?
+    check: known_good_match {current_master} vrrp
+    then:
+      drift: cause config.drift device={current_master} section=VRRP
+
+end: escalate {current_master} holds {interface} instead of {expected_master}, and nothing explains it. A person needs to look.
+
+causes:
+  vrrp.split_brain: "Both switches think they are master for {interface}, so hosts may lose their gateway."
+  vrrp.no_master: "Neither switch is master for {interface}, so that VLAN has no gateway."
+  vrrp.not_configured: "VRRP is not set up on {interface} on both switches."
+  device.down: "{device}, the usual master, is down."
+  interface.admin_shut: "{interface} on {device}, the usual master, is shut down."
+  interface.no_link: "{interface} on {device}, the usual master, is down."
+  interface.missing: "{interface} no longer exists on {device}."
+  config.drift: "The {section} config on {device} no longer matches its known-good copy, in: {drift_lines}."

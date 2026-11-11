@@ -1,0 +1,17 @@
+[Unit]
+Description=Network troubleshooter: service desk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=dheeraj
+WorkingDirectory=/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting
+ExecStart=/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting/.venv/bin/python -m ts desk --host 10.9.8.182 --port 8771
+# The address belongs to the overlay network, which can come up after this does.
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/dheeraj/advancedNetman/advancedNetmanTroubleshooting/data/desk.log
+StandardError=inherit
+
+[Install]
+WantedBy=multi-user.target
