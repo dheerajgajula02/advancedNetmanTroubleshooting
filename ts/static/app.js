@@ -565,7 +565,8 @@ async function flowReal(id) {
   const rec = await api("api/incidents/" + encodeURIComponent(id));
   const src = FLOW_FROM[rec.event.source] || FLOW_FROM.trap, steps = [], st = rec.stages || [];
   const say = p => (p && p.text ? p.text.split("\n").filter(Boolean).slice(0, 2).join(" ") : "");
-  steps.push([src[0], say(st[0]) || rec.event.title || ""], [src[1], rec.event.title || ""]);
+  const lines = st[0] ? st[0].text.split("\n") : [];
+  steps.push([src[0], lines[0] || rec.event.title || ""], [src[1], lines[1] || rec.event.title || ""]);
   steps.push(["pick", st.filter(p => p.key.startsWith("rule:")).map(p => p.label.replace(/^Rule: /, "")).join(", ") || "No rule covers it."]);
   const first = st.find(p => p.key === "first_look");
   if (first) steps.push(["first", say(first)]);
@@ -1274,7 +1275,7 @@ const REPAIR_WORDS = {fixed: "Repaired", failed: "Repair failed", held: "Not rep
 const VERDICTS = {bad_hardware: "Looks like failing hardware", tampering: "Looks like someone keeps doing this", scheduled: "Looks like a scheduled job", repeating: "This keeps happening"};
 
 const TODO_WORDS = {needs_you: "What to do", workaround: "What to do", handled: "Handled", working: "In progress", fixed: "Done", cleared: "Nothing to do", held: "Held back", watching: "Watch only", info: "For the record"};
-const BACK_WORDS = {"": "Now", now: "Now", failures: "History", review: "Review", rules: "Rules", tags: "Tags", "ai-data": "Data", collect: "Collect", train: "Train", monitors: "Monitors"};
+const BACK_WORDS = {"": "Now", now: "Now", failures: "History", flow: "How it works", review: "Review", rules: "Rules", tags: "Tags", "ai-data": "Data", collect: "Collect", train: "Train", monitors: "Monitors"};
 function backLink() {
   const to = S.backTo || "#/failures", name = to.replace(/^#\/?/, "").split(/[?/]/)[0];
   return `<a class="back" href="${esc(to)}">Back to ${esc(BACK_WORDS[name] || "History")}</a>`;

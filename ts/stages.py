@@ -182,7 +182,7 @@ def _agent(record: dict) -> dict | None:
 
 def _report(record: dict) -> dict:
     label = "Report"
-    if not record.get("concluded"):
+    if not (record.get("concluded") or "email" in record or "ai_note" in record):  # runs from before "concluded" was kept have one of these
         return {"key": "report", "label": label, "state": "waiting", "text": "Comes once the parts before it are done."}
     mail = record.get("email") or {}
     if mail.get("sent"):
