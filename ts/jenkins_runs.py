@@ -320,7 +320,7 @@ def _drive(s: Session, run_id: str) -> tuple[bool, str]:
         if time.time() > deadline:
             jenkins_api.stop(s.pipeline, number)
             return False, f"build #{number} took longer than {RUN_FOR // 60} minutes"
-    for _ in range(15):  # the build finishes its last stage after the rule has ended
+    for _ in range(60):  # the build finishes its last stage after the rule has ended
         try:
             b = jenkins_api.build(s.pipeline, number)
         except jenkins_api.Unavailable:
@@ -328,7 +328,7 @@ def _drive(s: Session, run_id: str) -> tuple[bool, str]:
         if b and not b.get("building"):
             s.result = b.get("result") or ""
             break
-        time.sleep(1)
+        time.sleep(0.25)
     return True, ""
 
 

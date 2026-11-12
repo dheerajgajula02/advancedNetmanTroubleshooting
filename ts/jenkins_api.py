@@ -148,7 +148,8 @@ def _xml(text: str) -> str:
 def start(name: str, params: dict[str, str]) -> str:
     """Queue a build of a pipeline. Returns the queue item's address."""
     body = urllib.parse.urlencode(params).encode()
-    where = _request("POST", f"{job_path(name)}/buildWithParameters", body, "application/x-www-form-urlencoded", want="location")
+    # delay=0sec skips Jenkins's quiet period (5 s here), which every rule of every run would otherwise wait out.
+    where = _request("POST", f"{job_path(name)}/buildWithParameters?delay=0sec", body, "application/x-www-form-urlencoded", want="location")
     if not where:
         raise Unavailable("Jenkins queued the build but did not say where")
     return where
@@ -196,4 +197,4 @@ def wait_started(queue_url: str, within: float) -> tuple[int | None, str]:
             return number, why
         if time.time() >= deadline:
             return None, f"Jenkins had not started it after {within:.0f} s"
-        time.sleep(1)
+        time.sleep(0.25)
