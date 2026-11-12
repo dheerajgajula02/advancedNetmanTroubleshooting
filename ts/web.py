@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-from ts import aiconfig, collect, configs, dataset, engine, history, overview, review, rulebook, store, training as fine_tuning
+from ts import aiconfig, collect, configs, dataset, engine, history, monitor_page, overview, review, rulebook, store, training as fine_tuning
 from ts.ruleset import load_ruleset
 from ts.view import state
 
@@ -28,7 +28,8 @@ HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; "
-                               "script-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'",
+                               "script-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; "
+                               "frame-src 'self' http://*:8051",  # the Netman GUI's Grafana proxy, for the monitors' graphs
 }
 
 
@@ -82,6 +83,10 @@ def make_handler(rules_dir: Path):
             return as_json({**review.listing(query.get("status") or None, query.get("kind") or None, int(query.get("page") or 1), int(query.get("size") or 12)), "counts": review.counts()})
         if path == "/api/tags":
             return as_json(review.tag_catalog())
+        if path == "/api/monitors":
+            return as_json(monitor_page.page())
+        if path == "/api/monitors/preview":
+            return as_json(monitor_page.preview(query))
         if path == "/api/incidents":
             return json.dumps(store.summaries()).encode(), "application/json", "no-store"
         m = re.fullmatch(r"/api/incidents/([A-Za-z0-9_.-]+)", path)
@@ -163,6 +168,7 @@ def make_handler(rules_dir: Path):
                 stop_job = re.fullmatch(r"/api/train/jobs/(ft-[0-9a-z-]+)/stop", path)
                 stop_campaign = re.fullmatch(r"/api/workbench/campaigns/(cmp-[0-9a-f]+)/stop", path)
                 endpoint = re.fullmatch(r"/api/ai-models/endpoints/([a-z0-9-]+)/(delete|models)", path)
+                monitor_status = re.fullmatch(r"/api/monitors/([a-z0-9-]+)/status", path)
                 if path == "/api/ai-models/roles":
                     aiconfig.set_role(data["role"], data.get("endpoint") or aiconfig.BUILT_IN, data.get("model") or "", data.get("effort") or "")
                     self._reply(200, {"saved": True})
@@ -200,6 +206,8 @@ def make_handler(rules_dir: Path):
                     if now_is == "handled":  # the real repair is done, so any stop-gap from this run may go back to known-good
                         configs.release(run_id=handled.group(1))
                     self._reply(200, {"state": now_is})
+                elif monitor_status:
+                    self._reply(200, monitor_page.set_status(monitor_status.group(1), data.get("status") or ""))
                 elif moved:
                     rulebook.set_mode(rules_dir, moved.group(1), data.get("mode") or "", "operator")
                     self._reply(200, {"mode": data.get("mode")})

@@ -133,7 +133,8 @@ def event_for(kind: str, device: str, subject: str, title: str, trigger: str, de
 # Seconds after an event before investigating it. Link-down needs Prometheus to have a clean
 # minute (checks.TRAFFIC_WINDOW). OSPF waits a little longer, so the link-down run for the
 # same port exists first and can be pointed at.
-HOLD = {"interface.down": 120, "ospf.neighbor_down": 150, "config.changed": 180, "device.restarted": 180}
+HOLD = {"interface.down": 120, "ospf.neighbor_down": 150, "config.changed": 180, "device.restarted": 180,
+        "monitor.fired": 20}  # a monitor has already waited for its own conditions
 DEFAULT_HOLD = 120
 MAX_HOLD = 1200  # a burst that never goes quiet is still investigated after this long
 

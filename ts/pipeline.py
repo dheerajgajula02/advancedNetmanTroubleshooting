@@ -7,7 +7,7 @@ email. Each part can fail by itself without losing the run or stopping the other
 
 from __future__ import annotations
 
-from ts import agent, analyst, capture, cards, fixer, history, memory, report, scrub, sources, tags
+from ts import agent, analyst, capture, cards, fixer, history, memory, monitor_ai, report, scrub, sources, tags
 from ts.ruleset import DEFAULT_RULES_DIR
 
 KEEP_DOCS = 60  # how many context items stay on the run for the UI
@@ -83,4 +83,5 @@ def conclude(record: dict, log=print) -> None:
         record["ai_note"] = "Nothing here needed a report, so the AI was not asked. Rules and checks did all of it."
     safely("index", lambda: history.add_run(record))
     safely("past runs", lambda: cards.remember_soon(record))
+    safely("monitor ideas", lambda: monitor_ai.after_run(record))
     capture.run(record)

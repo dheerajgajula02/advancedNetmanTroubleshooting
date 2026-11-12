@@ -97,6 +97,31 @@ def running_change_jobs() -> list[str]:
             for b in _recent(folder, time.time() - 21600) if b["result"] is None and time.time() - b["start"] < 14400]
 
 
+def change_windows(since: float, scan: int = 400) -> list[dict]:
+    """When jobs that change the network, or test it by changing it, were running, back to `since`.
+
+    Each is {"job", "start", "end"}; one still running ends now. Monitors use this to tell a fault a
+    test caused on purpose from a real one, both live and when replaying the past week.
+    """
+    now, out = time.time(), []
+    for name, folder in _jobs():
+        if not CHANGES_NETWORK.search(name):
+            continue
+        try:
+            last = int((folder / "nextBuildNumber").read_text().strip()) - 1
+        except (OSError, ValueError):
+            continue
+        for number in range(last, max(0, last - scan), -1):
+            b = _build(folder, number)
+            if b is None:
+                continue
+            end = b["start"] + b["seconds"] if b["result"] else min(now, b["start"] + 14400)  # a build left without a result stops counting after 4 h
+            if end < since:
+                break
+            out.append({"job": f"{name} #{number}", "start": b["start"], "end": end})
+    return sorted(out, key=lambda w: w["start"])
+
+
 @source("jenkins")
 def builds(start: float, end: float, device: str | None = None) -> list[Doc]:
     docs = []

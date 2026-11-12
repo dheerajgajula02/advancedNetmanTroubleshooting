@@ -13,6 +13,7 @@ const BASE = ROOT.dataset.api || "";   /* where the api lives: "" here, "/troubl
 const GROUPS = [
   {key: "incidents", href: "#/", tabs: [["now", "Now", "#/"], ["failures", "History", "#/failures"]]},
   {key: "rules", href: "#/review", tabs: [["review", "Review", "#/review"], ["rules", "Rules", "#/rules"], ["tags", "Tags", "#/tags"]]},
+  {key: "monitors", href: "#/monitors", tabs: [["monitors", "Monitors", "#/monitors"], ["mdash", "Dashboard", "#/monitors/dashboard"]]},
   {key: "ai", href: "#/models", tabs: [["models", "Models", "#/models"], ["collect", "Collect", "#/collect"], ["aidata", "Data", "#/ai-data"], ["train", "Train", "#/train"]]},
 ];
 ROOT.innerHTML = `<nav class="ts-tabs" aria-label="Troubleshooting pages"><span class="ts-links" id="ts-links"></span><span class="ts-spacer"></span><span class="ts-tele" id="tele"></span><button class="find" id="find" type="button">Find anything <kbd>Ctrl K</kbd></button></nav>
@@ -64,7 +65,7 @@ const STATE = {needs_you: {t: "Needs you", c: "red"}, workaround: {t: "Working f
 const ticks = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
 const plainCause = s => String(s ?? "").replace(/^[a-z_]+(\.[a-z_]+)+:\s*/i, "");   /* the AI opens with its cause label, which reads as noise to a person */
 const stateOf = k => STATE[k] || {t: words(k), c: "grey"};
-const ORIGIN_WORDS = {trap: "Trap", syslog: "Log message", gnmi: "Telemetry", health: "Heartbeat", ticket: "Ticket", manual: "Started by hand"};
+const ORIGIN_WORDS = {trap: "Trap", syslog: "Log message", gnmi: "Telemetry", health: "Heartbeat", ticket: "Ticket", manual: "Started by hand", monitor: "Monitor"};
 const sourceTag = r => { const word = r.ticket ? `Ticket T-${r.ticket}` : ORIGIN_WORDS[r.source]; return word ? `<span class="src" title="Where this came from">${esc(word)}</span>` : ""; };
 const byWord = b => b === "ai" ? `<span class="ai">AI</span>` : "Rules";
 
@@ -330,6 +331,8 @@ async function route() {
     if (path === "review") return await pageReview(q);
     if (path === "rules") return await pageRules();
     if (path === "tags") return await pageTags();
+    if (path === "monitors") return await pageMonitors();
+    if (path === "monitors/dashboard") return await pageMonitorDashboard();
     if (path === "models") return await pageModels();
     if (path === "ai-data") return await pageData(q);
     if (path === "collect") return await pageCollect();
@@ -942,7 +945,7 @@ const REPAIR_WORDS = {fixed: "Repaired", failed: "Repair failed", held: "Not rep
 const VERDICTS = {bad_hardware: "Looks like failing hardware", tampering: "Looks like someone keeps doing this", scheduled: "Looks like a scheduled job", repeating: "This keeps happening"};
 
 const TODO_WORDS = {needs_you: "What to do", workaround: "What to do", handled: "Handled", working: "In progress", fixed: "Done", cleared: "Nothing to do", held: "Held back", watching: "Watch only", info: "For the record"};
-const BACK_WORDS = {"": "Now", now: "Now", failures: "History", review: "Review", rules: "Rules", tags: "Tags", "ai-data": "Data", collect: "Collect", train: "Train"};
+const BACK_WORDS = {"": "Now", now: "Now", failures: "History", review: "Review", rules: "Rules", tags: "Tags", "ai-data": "Data", collect: "Collect", train: "Train", monitors: "Monitors"};
 function backLink() {
   const to = S.backTo || "#/failures", name = to.replace(/^#\/?/, "").split(/[?/]/)[0];
   return `<a class="back" href="${esc(to)}">Back to ${esc(BACK_WORDS[name] || "History")}</a>`;
@@ -1421,7 +1424,7 @@ async function pageReview(q) {
   const [d, rules] = await Promise.all([api(`api/review?status=${status}&kind=${kind}&page=${page}&size=12`), S.rules || api("api/rules").catch(() => ({rules: []}))]);
   S.rules = rules; S.installed = new Set(rules.rules.map(r => r.id));
   const c = d.counts, tab = (key, label, n) => `<a href="#/review?status=${key}${kind ? "&kind=" + kind : ""}" ${status === key ? 'aria-current="page"' : ""}>${label} <i>${n}</i></a>`;
-  const kinds = [["", "Everything"], ["rule", "Rules"], ["tag", "New tags"], ["backdate", "Past runs"]];
+  const kinds = [["", "Everything"], ["rule", "Rules"], ["monitor", "Monitors"], ["tag", "New tags"], ["backdate", "Past runs"]];
   const pages = Math.max(1, Math.ceil(d.total / d.size));
   $("#main").innerHTML = `<div class="wrap" style="max-width:940px">
     <div class="head"><h1>Review</h1><p>What the AI suggested. Nothing here takes effect until you accept it.</p></div>
@@ -1432,9 +1435,10 @@ async function pageReview(q) {
   </div>`;
   S.reviewItems = Object.fromEntries(d.items.map(p => [p.id, p]));
   $$(".prop[data-id]").forEach(wireCard);
+  $$("[data-preview]").forEach(el => drawPreview(el, `api/monitors/preview?proposal=${el.dataset.preview}`));
 }
 function reviewEmpty(status, kind) {
-  const what = {rule: "rule", tag: "new tag", backdate: "past-run tag"}[kind];
+  const what = {rule: "rule", monitor: "monitor", tag: "new tag", backdate: "past-run tag"}[kind];
   if (status === "pending") return what ? `No ${what} suggestions are waiting.` : "Nothing is waiting. When the AI works out something the rules could not, its suggestion appears here.";
   return `No ${what ? what + " " : ""}suggestions ${status} yet.`;
 }
@@ -1464,6 +1468,7 @@ function runChecks(p) {
 }
 function ruling(p) {
   if (p.status === "rejected") return `<div class="ruling rejected"><b>Rejected ${esc(ago(p.decided))}.</b> ${esc(p.reason)} <span class="muted">The AI is shown this reason whenever it works on something similar.</span></div>`;
+  if (p.status === "accepted" && p.kind === "monitor") return `<div class="ruling accepted"><b>Accepted ${esc(ago(p.decided))}.</b> Monitor <a href="#/monitors">${esc(p.proof.monitor || "")}</a> is watching.</div>`;
   if (p.status === "accepted") return `<div class="ruling accepted"><b>Accepted ${esc(ago(p.decided))}.</b> ${p.proof.mode ? `Installed ${p.proof.mode === "active" ? "live" : "watch only"}.` : `Put on ${plural(p.proof.tagged || 0, "run")}.`}</div>`;
   return "";
 }
@@ -1475,6 +1480,8 @@ function card(p) {
       `<h3>What it checks, in order</h3><ol class="story">${d.steps.map((s, n) => `<li><span class="n">${n + 1}.</span><div>${tpl(s.ask)} <code>${esc(s.check.name === "output_has" ? `${s.check.args.command} on ${s.check.args.device}, looking for "${s.check.args.text}"` : `${s.check.name} ${Object.values(s.check.args).join(" ")}`)}</code>${Object.entries(s.then || {}).map(([k, v]) => `<div class="then">If ${esc(words(k))}: ${thenText(v, d.causes || {})}</div>`).join("")}</div></li>`).join("")}</ol>` +
       (fix ? `<h3>What it would change: ${esc(fix.title)}</h3>${fixText(fix)}<p class="note">Risk ${esc(fix.risk)}. Afterwards it must pass: ${inFix((fix.verify || []).map(v => `${v.check.name} ${Object.values(v.check.args).join(" ")} = ${v.expect.join(" or ")}`).join("; "))}.</p>` : `<h3>What it would change</h3><p class="muted">Nothing. It only names the cause.</p>`) +
       (replay.ok ? `<div class="proof"><span class="led green"></span><div><b>Tested on what the AI saw.</b> Walked ${plural((replay.path || []).length, "step")} and reached ${esc(replay.reached)}.</div></div>` : `<div class="proof none"><span class="led off"></span><div>No replay on record.</div></div>`);
+  } else if (p.kind === "monitor") {
+    inner = monitorProposal(p);
   } else if (p.kind === "tag") {
     const b = p.body;
     inner = factRow([["Tag", `<span class="chip">${esc(b.tag)}</span>`], ["What it means", esc(b.description)], ["Learned from", runLink(p.run_id)], ["Suggested by", esc(p.model || "AI")]]) + runChecks(p);
@@ -1713,10 +1720,135 @@ async function pageModels() {
   });
 }
 
+/* ---------- monitors ---------- */
+const MON_STATE = {ok: ["Quiet", "green"], holding: ["Conditions holding", "amber"], fired: ["Started a run", "red"], held_back: ["Held back: a test was running", "blue"], no_data: ["No data", "off"], error: ["Cannot read its variables", "violet"]};
+const MON_EVENT = {fired: "Started a run", held_back: "Held back", cleared: "Cleared", accepted: "Accepted", paused: "Paused", active: "Resumed", retired: "Retired", error: "Could not read"};
+const OPW = {">": ">", ">=": "≥", "<": "<", "<=": "≤", "==": "=", "!=": "≠"};
+const grafanaBase = () => BASE ? "/grafana" : `${location.protocol}//${location.hostname}:8051`;  /* inside Netman its own proxy; here, Netman's proxy port */
+const fmtVal = v => v == null ? "no data" : Math.abs(v) >= 1000 ? fmtK(v) : String(Number(Number(v).toPrecision(3)));
+const minutesWords = n => n === 0 ? "the minute it began" : n < 0 ? `${Math.abs(n)} min before the alarm` : `${n} min after it began`;
+function monitorConditions(m) {
+  const join = m.match === "all" ? " <b>and</b> " : " <b>or</b> ";
+  return m.conditions.map(c => `<code>${esc(c.variable)}</code> ${esc(OPW[c.op] || c.op)} ${esc(fmtVal(c.value))}`).join(join) + (m.hold_seconds ? `, holding for ${esc(m.hold_seconds)} s` : "") + `. Then quiet for at least ${esc(m.cooldown_minutes)} min.`;
+}
+function monitorProposal(p) {
+  const m = p.body.monitor, t = (p.proof || {}).test || {}, vars = p.body.variables || {};
+  const tags = (m.tags || []).length ? `<div class="chips">${m.tags.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : "";
+  const parts = [];
+  if (t.catches_this_incident) parts.push(`Caught this incident${t.fired_minutes_from_incident != null ? `, ${esc(minutesWords(t.fired_minutes_from_incident))}` : ""}.`);
+  parts.push(t.false_alarms_in_week ? `Would have started ${plural(t.false_alarms_in_week, "other run")} in the week${(t.false_alarm_times || []).length ? ` (${esc(t.false_alarm_times.join(", "))})` : ""}.` : "No false alarms in the week.");
+  if (t.held_back_during_tests) parts.push(`Held back ${plural(t.held_back_during_tests, "time")} while test jobs were changing the network.`);
+  const proof = t.passed ? `<div class="proof"><span class="led green"></span><div><b>Replayed over the past week.</b> ${parts.join(" ")}</div></div>` : `<div class="proof none"><span class="led off"></span><div>No replay on record.</div></div>`;
+  return factRow([["Starts a run on", esc(m.interface ? `${m.device} ${m.interface}` : m.device)], tags && ["Tags", tags], ["Learned from", runLink(p.run_id)], ["Suggested by", esc(p.model || "AI")]]) +
+    `<h3>What it watches</h3><ul class="mlist">${m.variables.map(v => `<li><code>${esc(v.name)}</code> ${esc(vars[v.name] || "")}</li>`).join("")}</ul>` +
+    `<h3>When it starts a run</h3><p class="mwhen">${monitorConditions(m)}</p>` + proof +
+    `<div class="mcharts" data-preview="${esc(p.id)}"><p class="muted">Loading the graphs</p></div>`;
+}
+function monChart(sr, d) {
+  const t0 = d.from, t1 = d.to, X = t => 100 * (t - t0) / Math.max(1, t1 - t0);
+  const have = sr.values.filter(v => v != null), thr = sr.thresholds.map(t => t.value);
+  if (!have.length) return `<div class="plot"><span class="lab ytop">No values were recorded in this stretch.</span></div>`;
+  const top = Math.max(1, ...have, ...thr.map(v => v * 1.2)), bottom = Math.min(0, ...have, ...thr);
+  const Y = v => 6 + 88 * (1 - (v - bottom) / Math.max(1e-9, top - bottom));
+  let path = "", pen = false;
+  sr.times.forEach((t, i) => { const v = sr.values[i]; if (v == null) { pen = false; return; } path += `${pen ? "L" : "M"}${X(t).toFixed(2)} ${Y(v).toFixed(2)}`; pen = true; });
+  const bands = (d.episodes || []).map(e => { const a = Math.max(t0, e.began), b = Math.min(t1, (e.until || e.began) + 60); return b > a ? `<rect class="${e.held_back ? "held" : "fire"}" x="${X(a).toFixed(2)}" y="0" width="${Math.max(0.5, X(b) - X(a)).toFixed(2)}" height="100"></rect>` : ""; }).join("");
+  const inc = d.incident_at && d.incident_at >= t0 && d.incident_at <= t1;
+  return `<div class="plot"><svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${bands}${sr.thresholds.map(t => `<line class="thr" x1="0" x2="100" y1="${Y(t.value).toFixed(2)}" y2="${Y(t.value).toFixed(2)}"/>`).join("")}${inc ? `<line class="inc" x1="${X(d.incident_at).toFixed(2)}" x2="${X(d.incident_at).toFixed(2)}" y1="0" y2="100"/>` : ""}<path class="line" d="${path}"/></svg>
+    <span class="lab ytop">${esc(fmtVal(top))}</span><span class="lab ybot">${esc(fmtVal(bottom))}</span>${sr.thresholds.map(t => `<span class="lab thr-l" style="top:${Y(t.value).toFixed(1)}%">${esc(OPW[t.op] || t.op)} ${esc(fmtVal(t.value))}</span>`).join("")}${inc ? `<span class="lab inc-l" style="left:${X(d.incident_at).toFixed(1)}%">incident</span>` : ""}</div>
+    <div class="xlab"><span>${esc(dfmt(t0))}, ${esc(hm(t0))}</span><span>${esc(dfmt(t1))}, ${esc(hm(t1))}</span></div>`;
+}
+/* graphs are drawn here, not embedded from Grafana: each embedded panel starts a whole Grafana app and sits blank for seconds */
+async function drawPreview(el, url, live = false) {
+  try {
+    const d = await api(url);  /* the old graphs stay until the new ones are ready, so a redraw never blanks them */
+    el.innerHTML = `<div class="mgrid">${Object.entries(d.series).map(([name, sr]) => `<figure class="mchart"><figcaption><code>${esc(name)}</code>${live ? "" : ` ${esc(sr.words)}`}</figcaption>${monChart(sr, d)}</figure>`).join("")}</div>` +
+      `<div class="mkey"><span><i class="k-fire"></i>${live ? "started a run" : "would have started a run"}</span><span><i class="k-held"></i>held back: a test was running</span><span><i class="k-thr"></i>threshold</span>${d.incident_at ? `<span><i class="k-inc"></i>the incident</span>` : ""}</div>`;
+  } catch (e) { if (!live || !el.querySelector("svg")) el.innerHTML = `<p class="muted">The graphs could not be drawn: ${esc(e.message)}</p>`; }
+}
+const drawLive = () => $$("[data-live]").forEach(el => drawPreview(el, `api/monitors/preview?monitor=${encodeURIComponent(el.dataset.live)}&hours=6`, true));
+function monitorCard(m, d) {
+  const sp = m.spec, paused = m.status === "paused", [stateText, led] = MON_STATE[m.state] || ["Not looked at yet", "off"], vals = (m.last || {}).values || {};
+  const numbers = `<div class="mvars">${sp.variables.map(v => `<div class="mvar"><span class="muted"><code>${esc(v.name)}</code> now</span><b class="num" data-val="${esc(v.name)}">${esc(fmtVal(vals[v.name]))}</b><small>${sp.conditions.filter(c => c.variable === v.name).map(c => `starts a run at ${esc(OPW[c.op] || c.op)} ${esc(fmtVal(c.value))}`).join(", ")}</small><p>${esc(m.variables_words[v.name] || "")}</p></div>`).join("")}</div>`;
+  const panels = `<div class="mcharts" data-live="${esc(sp.id)}"><p class="muted">Loading the graphs</p></div><p class="note">The last 6 hours, read the same way the watcher reads them. The same graphs are on the <a href="#/monitors/dashboard">Grafana dashboard</a>.</p>`;
+  const evs = m.events.length ? `<details class="mevents"><summary>What it did lately</summary><ul>${m.events.map(e => `<li><time>${esc(dfmt(e.time))}, ${esc(hm(e.time))}</time> <b>${esc(MON_EVENT[e.kind] || e.kind)}</b> <span class="muted">${esc(e.note || "")}</span>${e.run_id ? ` <a href="#/run/${esc(e.run_id)}">Open the run</a>` : ""}</li>`).join("")}</ul></details>` : "";
+  const from = m.proposal ? `<a href="#/review?status=accepted&kind=monitor">Suggestion #${esc(m.proposal)}</a>${m.run_id ? `, from <a href="#/run/${esc(m.run_id)}">a run</a>` : ""}` : `Added by ${esc(m.by || "hand")}`;
+  return `<article class="prop mon" data-mon="${esc(sp.id)}"><header><h2>${esc(sp.title)}</h2><span class="mstate"><span class="led ${paused ? "off" : led}${m.state === "fired" && !paused ? " pulse" : ""}" data-led></span><span data-state>${paused ? "Paused" : esc(stateText)}</span></span></header>
+    ${m.why ? `<p class="why">${esc(m.why)}</p>` : ""}
+    ${factRow([["Starts a run on", esc(sp.interface ? `${sp.device} ${sp.interface}` : sp.device)], ["When", monitorConditions(sp)], ["Last looked", `<span data-looked>${m.last_eval ? esc(agoWords(m.last_eval)) : "not yet"}</span>`], ["Came from", from]])}
+    ${numbers}${panels}${evs}
+    <div class="decide" data-mon-acts>${paused ? `<button class="btn go" type="button" data-mon-act="active">Resume</button>` : `<button class="btn" type="button" data-mon-act="paused">Pause</button>`}<button class="btn" type="button" data-mon-act="ask-retire">Retire</button></div></article>`;
+}
+function sessionsBlock(d) {
+  if (!d.sessions.length) return "";
+  return `<section class="panel msess"><h2>Suggestion sessions</h2><p class="muted">Each time a run finds a cause, the AI looks for a monitor that would have caught it sooner. Its model is chosen on the AI models page, under Monitor suggestions.</p>
+    <ul class="dlist">${d.sessions.map(s => `<li><b>${esc(dfmt(s.time))}, ${esc(hm(s.time))}</b> <a href="#/run/${esc(s.run_id)}">${esc(s.run_id)}</a> <span class="chip">${esc(words(s.status))}</span> <span class="muted">${esc(s.model || "")}</span>${s.proposals.length ? ` suggested ${s.proposals.map(n => `<a href="#/review?status=pending&kind=monitor">#${esc(n)}</a>`).join(", ")}` : ""}${s.summary || s.error ? `<br><span class="muted">${esc(s.summary || s.error)}</span>` : ""}</li>`).join("")}</ul></section>`;
+}
+function wireMonitors() {
+  $$(".mon[data-mon]").forEach(el => {
+    const id = el.dataset.mon, box = $("[data-mon-acts]", el), original = box.innerHTML;
+    const said = {paused: "Paused. It is not looked at until you resume it.", active: "Watching again.", retired: "Retired. Its history stays."};
+    const act = async status => {
+      $$("button", box).forEach(b => { b.disabled = true; });
+      try { const r = await post(`api/monitors/${id}/status`, {status}); toast(said[status] + (/^could not/.test(r.grafana || "") ? ` The Grafana dashboard ${r.grafana}.` : "")); route(); }
+      catch (e) { toast(e.message, true); $$("button", box).forEach(b => { b.disabled = false; }); }
+    };
+    const wire = () => $$("[data-mon-act]", box).forEach(b => b.onclick = () => {
+      const a = b.dataset.monAct;
+      if (a === "ask-retire") { box.innerHTML = `<p class="warn">Retiring takes it off this page and the dashboard for good. What it did stays on record.</p><button class="btn danger" type="button" data-mon-act="retired">Retire</button><button class="btn" type="button" data-mon-act="back">Go back</button>`; wire(); return; }
+      if (a === "back") { box.innerHTML = original; wire(); return; }
+      act(a);
+    });
+    wire();
+  });
+}
+async function refreshMonitors() {
+  if (document.hidden || S.page !== "monitors") return;
+  try {
+    const d = await api("api/monitors");
+    d.monitors.forEach(m => {
+      const el = $(`.mon[data-mon="${CSS.escape(m.spec.id)}"]`);
+      if (!el || m.status === "paused") return;
+      const [text, led] = MON_STATE[m.state] || ["Not looked at yet", "off"], vals = (m.last || {}).values || {};
+      $("[data-state]", el).textContent = text;
+      $("[data-led]", el).className = `led ${led}${m.state === "fired" ? " pulse" : ""}`;
+      $("[data-looked]", el).textContent = m.last_eval ? agoWords(m.last_eval) : "not yet";
+      $$("[data-val]", el).forEach(b => { b.textContent = fmtVal(vals[b.dataset.val]); });
+    });
+    if (++S.monTicks % 3 === 0) drawLive();  /* the graphs once a minute, the numbers every 20 s */
+  } catch (e) { /* the next look will try again */ }
+}
+async function pageMonitors() {
+  setNav("monitors");
+  naming("Monitors");
+  const d = await api("api/monitors");
+  const full = `${grafanaBase()}/d/${d.grafana.uid}/${d.grafana.slug}?theme=dark&from=now-6h&to=now`;
+  $("#main").innerHTML = `<div class="wrap" style="max-width:1060px">
+    <div class="head"><h1>Monitors</h1><p>Numbers the network already reports, with conditions that start a troubleshooting run. After a run finds a cause, the AI suggests a monitor that would have caught it sooner, replayed over the past week. It starts watching once you accept it in Review.</p></div>
+    ${d.watching === false ? `<p class="mwarn">The watcher has not looked at the monitors in the last few minutes, so nothing is being watched. Check the troubleshooting watcher service.</p>` : ""}
+    <div class="mbar">${d.waiting ? `<a class="btn small go" href="#/review?status=pending&kind=monitor">${plural(d.waiting, "suggestion")} waiting</a>` : ""}<a class="btn small" href="#/monitors/dashboard">Dashboard</a><a class="btn small" href="${esc(full)}" target="_blank" rel="noreferrer">Open in Grafana &#8599;</a></div>
+    ${d.monitors.length ? d.monitors.map(m => monitorCard(m, d)).join("") : `<div class="panel empty">No monitors yet. After a run finds a cause, the AI suggests monitors that would have caught it sooner. They wait in <a href="#/review?kind=monitor">Review</a> until you accept one.</div>`}
+    ${sessionsBlock(d)}
+  </div>`;
+  wireMonitors();
+  drawLive();
+  S.monTicks = 0;
+  S.poll = setInterval(refreshMonitors, 20000);
+}
+async function pageMonitorDashboard() {
+  setNav("mdash");
+  naming("Monitors dashboard");
+  const d = await api("api/monitors"), url = `${grafanaBase()}/d/${d.grafana.uid}/${d.grafana.slug}?theme=dark&refresh=30s&from=now-6h&to=now`;
+  $("#main").innerHTML = `<div class="wrap" style="max-width:1240px">
+    <div class="head"><h1>Monitors dashboard</h1><p>Every monitor in Grafana: its state, and each variable against its threshold, as Prometheus stores them.</p></div>
+    <div class="mbar"><a class="btn small" href="#/monitors">Monitors</a><a class="btn small" href="${esc(url)}" target="_blank" rel="noreferrer">Open in Grafana &#8599;</a></div>
+    <div class="gfull"><iframe src="${esc(url + "&kiosk")}" title="${esc(d.grafana.title)}"></iframe></div></div>`;
+}
+
 /* ---------- find anything ---------- */
 const PAL = {items: [], at: 0, token: 0, back: null};
 function palStatic() {
-  const pages = [["Now", "#/"], ["History", "#/failures"], ["Waiting for you", "#/failures?state=needs_you"], ["Review", "#/review"], ["Rules", "#/rules"], ["Tags", "#/tags"], ["AI models", "#/models"], ["Collect", "#/collect"], ["Data", "#/ai-data"], ["Train", "#/train"]].map(([t, go]) => ({t, sub: "Page", go}));
+  const pages = [["Now", "#/"], ["History", "#/failures"], ["Waiting for you", "#/failures?state=needs_you"], ["Review", "#/review"], ["Rules", "#/rules"], ["Tags", "#/tags"], ["Monitors", "#/monitors"], ["Monitors dashboard", "#/monitors/dashboard"], ["AI models", "#/models"], ["Collect", "#/collect"], ["Data", "#/ai-data"], ["Train", "#/train"]].map(([t, go]) => ({t, sub: "Page", go}));
   const devices = (S.now && S.now.map ? S.now.map.nodes : []).map(n => ({t: n.id, sub: `Device, ${n.bad.length ? "failing" : ROLE_WORDS[n.role] || "no problems"}`, dev: n.id, led: n.bad.length ? "red" : ""}));
   const rules = (S.rules ? S.rules.rules : []).filter(r => r.table !== "filter").map(r => ({t: r.title || r.id, sub: "Rule", rule: r.id}));
   const tags = (S.tags || []).map(t => ({t: t.tag, sub: "Tag", go: "#/failures?tag=" + encodeURIComponent(t.tag)}));

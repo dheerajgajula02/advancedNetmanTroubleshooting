@@ -201,7 +201,8 @@ dataset needs at least 8 training examples before it can be trained.
 
 ## What starts a run
 
-Traps, tickets from the service desk, and a heartbeat that checks everything every 20 minutes.
+Traps, tickets from the service desk, monitors you accepted (see Monitors below), and a
+heartbeat that checks everything every 20 minutes.
 
 The service desk (`ts/desk.py`, port 8771) is its own site over the same database. People
 write in their own words, and `ts/tickets.py` knows who sits at which computer, so the
@@ -265,6 +266,52 @@ The console's AI models page chooses the endpoint, model and thinking effort for
 for each person's computer, takes any OpenAI-compatible endpoint, and shows what has been
 used (`ts/aiconfig.py`). Saved keys are never sent back to the page.
 
+## Monitors
+
+A monitor is a condition on numbers the network already reports. When the condition is
+met, it starts a troubleshooting run. An example: "carrier transitions on s1 Ethernet4 in
+the last 10 minutes ≥ 2 and linkDown traps from s1 in the last 10 minutes ≥ 1". Monitors
+live in `ts/monitors.py`. Each one has:
+
+- **Variables (1 to 5).** A variable reads either a Prometheus metric (gNMI or SNMP) through
+  a fixed function such as `increase`, `rate`, `changes` or `max_over` over a window, or a
+  count of traps or syslog lines from the data lake.
+- **Conditions (1 to 5).** Each compares one variable with a number. A monitor needs all of
+  them, or any one of them.
+- **Hold and quiet time.** The hold is how long the conditions must stay true. The quiet
+  time is how long it waits before starting another run.
+
+Every variable is checked when it is written, against Prometheus and the data lake, so a
+monitor cannot read a metric or port that does not exist. The watcher looks at every active
+monitor every 30 seconds. While a job that changes the network is running, or within five
+minutes of one ending, a monitor that would fire is held back and noted instead, so the
+nightly tests never start runs.
+
+**Suggestions.** After a run finds a cause, `ts/monitor_ai.py` asks the model chosen for
+"Monitor suggestions" on the AI models page whether a monitor would have caught it sooner.
+The model never writes PromQL or guesses names. It works through tools:
+
+1. `list_variables` shows what a device reports.
+2. `read_variable` shows a variable's values at the incident, on a normal day and week, and
+   while tests ran.
+3. `test_monitor` replays a monitor over the past seven days.
+4. `propose_monitor` accepts only a monitor that was tested and passed: it caught this
+   incident and started at most two other runs in the week.
+
+A suggestion waits in Review with the model's reasons, the replay results and a graph of
+each variable around the incident. Nothing watches until you accept it. At most four runs
+an hour are looked at, and runs during tests are skipped.
+
+**Where they show.** The Monitors page lists each monitor, its state and current values,
+and graphs of the last 6 hours, and lets you pause, resume or retire it. The page draws
+those graphs itself, because each embedded Grafana panel loads a whole Grafana app and
+stays blank for seconds. The Dashboard tab is the
+whole Grafana dashboard "Troubleshooting monitors" (`ts/grafana_monitors.py`), which is
+rebuilt whenever a monitor is accepted, paused, resumed or retired. The graphs read what
+the watcher itself exports at `http://10.0.0.10:9810/metrics` (`ts_monitor_*`), which the
+Prometheus job `ts_monitors` scrapes. Adding monitors needs no change on the Prometheus
+machine.
+
 ## Collect and train
 
 Collect runs campaigns (`drills/campaign.py`): a list of situations, a number of rounds, one
@@ -304,6 +351,7 @@ the machine powers itself off if nothing touches it for 40 minutes.
 | `ts/brain.py` | each agent's own memory and how it is found again |
 | `drills/people.py`, `drills/office.py` | the people at the computers, their working day, and what they notice and answer |
 | `ts/aiconfig.py` | which model each job uses, endpoints, keys and usage |
+| `ts/monitors.py`, `ts/monitor_ai.py`, `ts/grafana_monitors.py`, `ts/monitor_page.py` | monitors: variables, watching and replaying; the AI's suggestions; the Grafana dashboard; the page |
 | `ts/collect.py`, `ts/training.py`, `ts/trainspec.py`, `deploy/trainer/` | collecting and fine-tuning |
 | `deploy/backup/` | the nightly backup to pve2 and its weekly restore check |
 | `deploy/health/` | the five-minute health check and its emails |
@@ -314,7 +362,8 @@ the machine powers itself off if nothing touches it for 40 minutes.
 The pages are drawn in the Netman GUI's look, and they live in its sidebar under
 Troubleshooting (http://10.9.8.182:8050/troubleshooting). Each sidebar entry opens a
 group whose pages are tabs across the top: Incidents (Now, History, each run's replay),
-Rules & review (Review, Rules, Tags) and AI agents (Models, Collect, Data, Train). The
+Rules & review (Review, Rules, Tags), Monitors (Monitors, Dashboard) and AI agents
+(Models, Collect, Data, Train). The
 Netman GUI forwards `/troubleshooting/app.js`, `app.css` and `/troubleshooting/api/...`
 here, so a change to these pages needs no Netman release; see `lab4_gui/README.md` there.
 This service's own page on port 8770 shows the same pages in a copy of Netman's frame
@@ -367,6 +416,8 @@ address and opens each tool with its styles. Results: `data/health.json`; to loo
 .venv/bin/python -m ts tags
 .venv/bin/python -m ts ai run ID                             # give a stored run to the AI
 .venv/bin/python -m ts mcp [--run ID]                        # the same tools over MCP
+.venv/bin/python -m ts monitor list | test FILE [--around 'YYYY-MM-DD HH:MM'] | add FILE
+.venv/bin/python -m ts monitor status ID active|paused|retired | suggest RUN | grafana
 .venv/bin/python -m pytest -q
 .venv/bin/python drills/run.py list | NAME [NAME ...]        # results: data/drills/
 ```

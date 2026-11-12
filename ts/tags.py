@@ -78,6 +78,7 @@ EVENT_TAGS: dict[str, tuple[str, ...]] = {
     "mac.age": ("switching/vlan",),
     "lldp.change": ("link/cabling",),
     "health.failure": ("device/resources",),
+    "monitor.fired": (),  # what a monitor is about is on the event itself (its tags), so no ordinary rule runs for it unasked
 }
 
 _CAUSE_TAGS = [
@@ -132,7 +133,8 @@ def for_record(rec: dict) -> list[str]:
     """What a run is about: where the alarm came from, then what was found."""
     rule = rec.get("rule") or {}
     found = rule.get("tags", []) if rule.get("position") in ("beginning", "end") and rec["result"].get("kind") == "cause" else []  # what a specific rule says it is about
-    return list(dict.fromkeys([*for_event(rec["event"].get("event", "")), *for_cause(rec["result"].get("label") or ""), *found]))
+    own = [t for t in rec["event"].get("tags") or [] if isinstance(t, str)]  # a monitor says what it watches for
+    return list(dict.fromkeys([*for_event(rec["event"].get("event", "")), *own, *for_cause(rec["result"].get("label") or ""), *found]))
 
 
 def covers(patterns, tags) -> bool:

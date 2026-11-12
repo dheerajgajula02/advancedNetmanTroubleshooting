@@ -386,6 +386,11 @@ def cmd_watch(args) -> int:
 
         threading.Thread(target=sweeping, daemon=True).start()
 
+    from ts import monitor_ai, monitors
+    threading.Thread(target=monitors.watch_forever, args=(found.put, say), daemon=True).start()
+    monitors.serve_metrics(log=say)
+    monitor_ai.start(say)
+
     say(f"watching {TRAPS_LOG} for traps" + (f", sweeping every {args.sweep:.0f} s" if args.sweep > 0 else ""))
     last_status = 0.0
     for line in follow(TRAPS_LOG):
@@ -547,6 +552,83 @@ def cmd_train_worker(args) -> int:
     return training.run_job(args.job)
 
 
+def _spec_from(path: str) -> dict:
+    import json
+    return json.loads(Path(path).read_text())
+
+
+def cmd_monitor_list(args) -> int:
+    import time
+    from ts import monitors
+    rows = monitors.listing()
+    if not rows:
+        print("no monitors yet")
+    for row in rows:
+        seen = time.strftime("%m-%d %H:%M", time.localtime(row["last_eval"])) if row.get("last_eval") else "never"
+        print(f"{row['id']:<32} {row['status']:<7} {row.get('state') or '-':<10} looked {seen}")
+        print(f"    {monitors.describe(row['spec'])}")
+    return 0
+
+
+def cmd_monitor_test(args) -> int:
+    import json
+    import time
+    from ts import monitors
+    try:
+        spec = monitors.clean(_spec_from(args.file))
+    except monitors.Invalid as exc:
+        print(f"invalid: {exc}")
+        return 1
+    around = time.mktime(time.strptime(args.around, "%Y-%m-%d %H:%M")) if args.around else None
+    result = monitors.backtest(spec, days=args.days, around=around)
+    print(monitors.describe(spec))
+    print(json.dumps({k: v for k, v in result.items() if k != "episodes"}, indent=1, default=str))
+    for e in result["episodes"]:
+        what = "fired" if e["fired_at"] else "held back: " + ", ".join(e["jobs"][:2])
+        print(f"  {time.strftime('%m-%d %H:%M', time.localtime(e['began']))}  {what}")
+    return 0
+
+
+def cmd_monitor_add(args) -> int:
+    from ts import grafana_monitors, monitors
+    try:
+        made = monitors.add(monitors.clean(_spec_from(args.file)), args.why, "operator")
+    except monitors.Invalid as exc:
+        print(f"invalid: {exc}")
+        return 1
+    print(f"added {made['id']}; grafana: {grafana_monitors.sync_quietly()}")
+    return 0
+
+
+def cmd_monitor_status(args) -> int:
+    from ts import grafana_monitors, monitors
+    monitors.set_status(args.id, args.status, "operator")
+    print(f"{args.id} is {args.status}; grafana: {grafana_monitors.sync_quietly()}")
+    return 0
+
+
+def cmd_monitor_suggest(args) -> int:
+    from ts import monitor_ai, store
+    record = store.load(args.run)
+    if not record:
+        print(f"no run {args.run}")
+        return 1
+    why_not = monitor_ai.skip_reason(record)
+    if why_not and not args.anyway:
+        print(f"the watcher would not look at this run: {why_not} (use --anyway to look all the same)")
+        return 1
+    done = monitor_ai.suggest(record, print, args.model)
+    for c in done["calls"]:
+        print(f"  {c['n']:>2}. {c['tool']}: {c['outcome']} {c['saw'][:160]}")
+    return 0 if done["status"] == "done" else 1
+
+
+def cmd_monitor_grafana(args) -> int:
+    from ts import grafana_monitors
+    print(grafana_monitors.sync())
+    return 0
+
+
 def cmd_serve(args) -> int:
     from ts.web import serve
     serve(args.host, args.port, Path(args.rules))
@@ -644,6 +726,27 @@ def build_parser() -> argparse.ArgumentParser:
     tw = sub.add_parser("train-worker", help="look after one fine-tuning job; the console starts this")
     tw.add_argument("job")
     tw.set_defaults(func=cmd_train_worker)
+    mon = sub.add_parser("monitor", help="monitors: variables with conditions that start a run").add_subparsers(dest="monitor_command", required=True)
+    mon.add_parser("list", help="the monitors and their state").set_defaults(func=cmd_monitor_list)
+    mt = mon.add_parser("test", help="replay a monitor written as JSON over the past days")
+    mt.add_argument("file")
+    mt.add_argument("--days", type=float, default=7)
+    mt.add_argument("--around", help="when an incident began, YYYY-MM-DD HH:MM, to see whether it is caught")
+    mt.set_defaults(func=cmd_monitor_test)
+    ma = mon.add_parser("add", help="add a monitor written as JSON, active at once")
+    ma.add_argument("file")
+    ma.add_argument("--why", default="", help="why it exists, shown with it")
+    ma.set_defaults(func=cmd_monitor_add)
+    ms = mon.add_parser("status", help="pause, resume or retire a monitor")
+    ms.add_argument("id")
+    ms.add_argument("status", choices=("active", "paused", "retired"))
+    ms.set_defaults(func=cmd_monitor_status)
+    mg = mon.add_parser("suggest", help="let the AI suggest monitors from a stored run now")
+    mg.add_argument("run")
+    mg.add_argument("--model", help="a model already chosen on the AI models page")
+    mg.add_argument("--anyway", action="store_true", help="even if the watcher would skip this run")
+    mg.set_defaults(func=cmd_monitor_suggest)
+    mon.add_parser("grafana", help="rebuild the Grafana dashboard of monitors").set_defaults(func=cmd_monitor_grafana)
     s = sub.add_parser("serve", help="serve the read-only rules UI")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8770)

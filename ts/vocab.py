@@ -34,11 +34,12 @@ EVENT_TYPES: dict[str, frozenset[str]] = {
     "lldp.change": frozenset(),
     "health.failure": frozenset({"category"}),
     "ticket.report": frozenset({"ticket_id"}),
+    "monitor.fired": frozenset({"monitor"}),  # an accepted monitor's conditions held (ts/monitors.py)
 }
 
 ROLES = frozenset({"border", "core", "distribution", "access", "expansion", "host", "isp"})
 PLATFORMS = frozenset({"eos", "frr", "linux"})
-SOURCES = frozenset({"trap", "syslog", "gnmi", "health", "ticket", "manual"})
+SOURCES = frozenset({"trap", "syslog", "gnmi", "health", "ticket", "manual", "monitor"})
 SEVERITIES = frozenset({"debug", "info", "notice", "warning", "error", "critical"})
 
 # device -> (role, platform)

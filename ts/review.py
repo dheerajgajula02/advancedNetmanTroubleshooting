@@ -15,7 +15,7 @@ from pathlib import Path
 from ts import capture, history, rulebook, store, tags
 from ts.ruleset import DEFAULT_RULES_DIR
 
-KINDS = ("rule", "tag", "backdate")
+KINDS = ("rule", "tag", "backdate", "monitor")
 PENDING, ACCEPTED, REJECTED = "pending", "accepted", "rejected"
 
 
@@ -160,6 +160,12 @@ def accept(number: int, by: str = "operator", mode: str = "shadow", runs: list[s
     """Do what was suggested. `mode` is how a rule starts out, `runs` which past runs a tag goes on (all of them if not given)."""
     found = _waiting(number, path)
     body, kind = found["body"], found["kind"]
+    if kind == "monitor":
+        from ts import grafana_monitors, monitors
+        made = monitors.add(body["monitor"], found["why"], by, number, found["run_id"])
+        outcome = {"monitor": made["id"], "grafana": grafana_monitors.sync_quietly(), "closed": []}
+        _settle(number, ACCEPTED, "", by, outcome, path)
+        return outcome
     if kind == "rule":
         if mode not in ("shadow", "active"):
             raise rulebook.RuleRefused("A rule starts out as shadow or active.")

@@ -36,11 +36,12 @@ CATALOG_GOOD_FOR = 6 * 3600
 DAY = 86400
 
 _DEFAULT = os.environ.get("TS_LLM_MODEL", "deepseek-v4.1-flash")
-DEFAULTS = {"support": _DEFAULT, "desk": _DEFAULT, "notes": _DEFAULT, "customer": "longcat-2.5-free"}
+DEFAULTS = {"support": _DEFAULT, "desk": _DEFAULT, "notes": _DEFAULT, "monitors": _DEFAULT, "customer": "longcat-2.5-free"}
 ALWAYS_ALLOWED = ("deepseek-v4.1-flash", "muse-spark-1.3-contributor")  # what a run may name directly, with nothing chosen on the page
 ROLE_WORDS = {"support": ("Support agent", "Investigates and fixes every ticket and incident."),
               "desk": ("Service desk", "Reads each ticket, writes to the person, and judges their replies."),
               "notes": ("Memory notes", "Writes the short note kept for every finished run."),
+              "monitors": ("Monitor suggestions", "After a run finds a cause, suggests monitors that would catch it sooner, tested on the past week."),
               "customer": ("Computers, by default", "Plays the person at any computer below that has no model of its own.")}
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 _lock = threading.Lock()
