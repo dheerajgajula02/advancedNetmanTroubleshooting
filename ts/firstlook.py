@@ -72,6 +72,23 @@ def _one_device(device: str) -> tuple[str, dict | None, str]:
         return device, None, f"could not be read: {type(exc).__name__}"
 
 
+_RECENT_CONFIGS: dict = {}  # the last comparison, for runs that come in a burst (see take's fresh_within)
+
+
+def _config_differences_within(seconds: float) -> tuple[list[dict], list[str]]:
+    at, value = _RECENT_CONFIGS.get("at", 0.0), _RECENT_CONFIGS.get("value")
+    if value is not None and time.time() - at < seconds:
+        return value
+    value = _config_differences()
+    _RECENT_CONFIGS.update(at=time.time(), value=value)
+    return value
+
+
+def forget_recent() -> None:
+    """After the network was changed, the next look reads every device again."""
+    _RECENT_CONFIGS.clear()
+
+
 def _config_differences() -> tuple[list[dict], list[str]]:
     """Every device against its known-good config, leaving out what is on hold. (differences, what could not be compared)"""
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
@@ -139,9 +156,9 @@ def _deploys() -> list[str]:
         return [f"Jenkins could not be asked: {type(exc).__name__}"]
 
 
-def _has_anything_changed(docs: list[dict], skip: str) -> dict:
+def _has_anything_changed(docs: list[dict], skip: str, fresh_within: float = 0) -> dict:
     now = time.time()
-    differs, unread = _config_differences()
+    differs, unread = _config_differences_within(fresh_within) if fresh_within else _config_differences()
     earlier = _earlier_changes()
     kept, ours = _changes_we_made(skip, now)
     deploys = _deploys()
@@ -165,8 +182,9 @@ def _safely(work, *args) -> dict:
         return {"verdict": "unknown", "summary": f"This could not be checked ({type(exc).__name__}).", "lines": []}
 
 
-def take(event: dict, docs: list[dict] | None = None, run_id: str = "") -> dict:
-    return scrub.deep({"time": time.time(), "working": _safely(_was_it_working, event, run_id), "changed": _safely(_has_anything_changed, docs or [], run_id)})
+def take(event: dict, docs: list[dict] | None = None, run_id: str = "", fresh_within: float = 0) -> dict:
+    """fresh_within: reuse a comparison of every device's config made this many seconds ago, for runs that come in a burst."""
+    return scrub.deep({"time": time.time(), "working": _safely(_was_it_working, event, run_id), "changed": _safely(_has_anything_changed, docs or [], run_id, fresh_within)})
 
 
 def _config_lines(differs: list[dict]) -> tuple[list[str], list[str]]:

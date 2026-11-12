@@ -167,6 +167,50 @@ node {{
 """
 
 
+RUN_PIPELINE = "troubleshooting-run"  # one build for each run, its stages as they happen; no rule may take this name
+STAGE_WAIT_MINUTES = 120
+
+
+def run_script() -> str:
+    """A build that holds no executor: each stage waits on an input the troubleshooter answers with what it found and the next stage's name."""
+    return f"""// The whole of one troubleshooting run: what started it, the first look, every rule, the repair, the AI's check and fix, the report.
+// Written by the troubleshooter. Changes made here are overwritten.
+// It holds no executor. Each stage waits for the troubleshooter to say what that part found and what comes next,
+// so a stage shows as running for as long as that part of the run takes. The rules' and repairs' own builds are linked from their stages.
+currentBuild.displayName = params.MARK ? "#${{env.BUILD_NUMBER}} [${{params.MARK}}] ${{params.RUN}}" : "#${{env.BUILD_NUMBER}} ${{params.RUN}}"
+if (params.BADGE) {{
+  currentBuild.description = params.BADGE
+}}
+String next = params.FIRST
+int n = 0
+while (next) {{
+  n += 1
+  stage(next) {{
+    def said = timeout(time: {STAGE_WAIT_MINUTES}, unit: 'MINUTES') {{
+      input(id: "Stage${{n}}", message: 'Waiting for the troubleshooter', ok: 'Done',
+            parameters: [text(name: 'SAW', defaultValue: ''), string(name: 'STATE', defaultValue: 'done'), string(name: 'NEXT', defaultValue: ''), string(name: 'BADGE', defaultValue: '')])
+    }}
+    echo said.SAW
+    if (said.BADGE) {{
+      currentBuild.description = said.BADGE
+    }}
+    if (said.STATE == 'failed') {{
+      unstable("${{next}}: this part did not work")
+    }}
+    next = said.NEXT
+  }}
+}}
+"""
+
+
+RUN_PARAMS = [
+    ("RUN", "string", "The troubleshooting run this build shows."),
+    ("FIRST", "string", "The name of the first stage."),
+    ("MARK", "string", "A few words in front of the build's name, such as AI monitor for a run started by a monitor the AI suggested."),
+    ("BADGE", "string", "Shown as the build's description from the start: what started the run."),
+]
+
+
 PARAMS = [
     ("RUN", "string", "The troubleshooting run this build belongs to."),
     ("TS_URL", "string", "Where the troubleshooter is listening for this build, on this machine."),
@@ -175,10 +219,10 @@ PARAMS = [
 ]
 
 
-def _params_xml() -> str:
+def _params_xml(params=None) -> str:
     kinds = {"string": "hudson.model.StringParameterDefinition", "password": "hudson.model.PasswordParameterDefinition"}
     out = []
-    for name, kind, text in PARAMS:
+    for name, kind, text in params or PARAMS:
         extra = "<trim>true</trim>" if kind == "string" else ""
         out.append(f"<{kinds[kind]}><name>{name}</name><description>{jenkins_api._xml(text)}</description><defaultValue></defaultValue>{extra}</{kinds[kind]}>")
     return "".join(out)
@@ -197,10 +241,14 @@ def description(rule) -> str:
     return "\n".join(lines)
 
 
-def config_xml(rule) -> tuple[str, str]:
-    """(the job's config.xml, its fingerprint)."""
-    script = diagnose_script(rule) if rule.table == "diagnose" else fix_script(rule)
-    text = description(rule)
+RUN_TEXT = ("Every troubleshooting run, one build each, as it happens: what started it, the first look at what moved from known-good, "
+            "each rule (the ones the AI wrote end in [AI], watch-only ones in [watch-only]), the repair, the AI's check of whether it is still broken, the AI's fix, and the report. "
+            "A run started by a monitor the AI suggested has [AI monitor] in front of its name and says so in its description. A stage that did not work, or found it "
+            "still broken, is marked unstable. Each stage's log names the rule's or repair's own build. "
+            "Started by the troubleshooter; not meant to be started by hand. Written by the troubleshooter, so edits here are overwritten.")
+
+
+def _job_xml(script: str, text: str, params, disabled: bool = False) -> tuple[str, str]:
     print_ = hashlib.sha256((script + text).encode()).hexdigest()[:16]
     script = f"// fingerprint {print_}\n" + script
     xml = f"""<?xml version='1.1' encoding='UTF-8'?>
@@ -209,14 +257,24 @@ def config_xml(rule) -> tuple[str, str]:
   <keepDependencies>false</keepDependencies>
   <properties>
     <jenkins.model.BuildDiscarderProperty><strategy class="hudson.tasks.LogRotator"><daysToKeep>-1</daysToKeep><numToKeep>{KEEP_BUILDS}</numToKeep><artifactDaysToKeep>-1</artifactDaysToKeep><artifactNumToKeep>-1</artifactNumToKeep></strategy></jenkins.model.BuildDiscarderProperty>
-    <hudson.model.ParametersDefinitionProperty><parameterDefinitions>{_params_xml()}</parameterDefinitions></hudson.model.ParametersDefinitionProperty>
+    <hudson.model.ParametersDefinitionProperty><parameterDefinitions>{_params_xml(params)}</parameterDefinitions></hudson.model.ParametersDefinitionProperty>
   </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition" plugin="workflow-cps"><script>{jenkins_api._xml(script)}</script><sandbox>true</sandbox></definition>
   <triggers/>
-  <disabled>{'true' if rule.mode == 'retired' else 'false'}</disabled>
+  <disabled>{'true' if disabled else 'false'}</disabled>
 </flow-definition>
 """
     return xml, print_
+
+
+def run_config_xml() -> tuple[str, str]:
+    return _job_xml(run_script(), RUN_TEXT, RUN_PARAMS)
+
+
+def config_xml(rule) -> tuple[str, str]:
+    """(the job's config.xml, its fingerprint)."""
+    script = diagnose_script(rule) if rule.table == "diagnose" else fix_script(rule)
+    return _job_xml(script, description(rule), PARAMS, rule.mode == "retired")
 
 
 FOLDER_TEXT = ("The troubleshooter's rules, one pipeline each. The troubleshooter starts them for every run, "
@@ -231,6 +289,8 @@ def wanted(rules) -> dict[str, object]:
         if rule.table not in ("diagnose", "fix") or rule.mode == "proposed":
             continue
         name = name_of(rule)
+        if name == RUN_PIPELINE:
+            raise ValueError(f"the rule {rule.id} wants the pipeline {name}, which shows whole runs")
         if name in out:
             raise ValueError(f"rules {out[name].id} and {rule.id} both want the pipeline {name}")
         out[name] = rule
@@ -239,6 +299,8 @@ def wanted(rules) -> dict[str, object]:
 
 def clash(rules, name: str, rule_id: str) -> str | None:
     """Why a new rule may not have this pipeline name, or None."""
+    if name == RUN_PIPELINE:
+        return f"The pipeline {name} shows whole runs; a rule cannot have it."
     for rule in rules:
         if rule.id != rule_id and name_of(rule) == name:
             return f"The pipeline {name} already belongs to the rule {rule.id}."
@@ -265,8 +327,15 @@ def sync(rules, log=print) -> dict:
         else:
             jenkins_api.put_job(name, xml, exists=False)
             done["created"].append(name)
+    xml, print_ = run_config_xml()
+    if RUN_PIPELINE not in have:
+        jenkins_api.put_job(RUN_PIPELINE, xml, exists=False)
+        done["created"].append(RUN_PIPELINE)
+    elif f"fingerprint {print_}" not in (jenkins_api.config(RUN_PIPELINE) or ""):
+        jenkins_api.put_job(RUN_PIPELINE, xml, exists=True)
+        done["updated"].append(RUN_PIPELINE)
     for name, info in have.items():
-        if name not in wanted(rules) and not info["disabled"]:
+        if name not in wanted(rules) and name != RUN_PIPELINE and not info["disabled"]:
             jenkins_api.set_enabled(name, False)
             done["disabled"].append(name)
     if done["created"] or done["updated"] or done["disabled"] or done["enabled"]:
@@ -276,7 +345,7 @@ def sync(rules, log=print) -> dict:
 
 def digest(rules) -> str:
     """What the folder should hold, in one value: it changes whenever a pipeline would."""
-    parts = [f"{name}:{config_xml(rule)[1]}:{rule.mode}" for name, rule in wanted(rules).items()]
+    parts = [f"{name}:{config_xml(rule)[1]}:{rule.mode}" for name, rule in wanted(rules).items()] + [f"{RUN_PIPELINE}:{run_config_xml()[1]}"]
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 

@@ -879,3 +879,137 @@ body.drawer-open main { transition: margin-right .22s; }
 #ts .jenk .jwhat { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 #ts .jenk .jrow a { color: var(--ink-2); overflow-wrap: anywhere; }
 #ts .jenk .sub { color: var(--ink-2); font-size: 13.5px; margin-top: 2px; }
+
+/* the parts of a run, the same stages as its troubleshooting-run build */
+#ts .stages { margin-bottom: 14px; }
+#ts .stages h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+#ts .stages h2 small { color: var(--ink-2); font-weight: 400; font-size: 12.5px; }
+#ts .stages .jl { margin-left: auto; font-size: 13px; font-weight: 400; }
+#ts .stages .jl a { color: var(--ink-2); }
+#ts .strip { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 0; }
+#ts .stg { display: flex; align-items: center; animation: stg-in .35s ease both; animation-delay: calc(var(--i) * 60ms); }
+#ts .stg + .stg::before { content: ""; width: 14px; height: 2px; background: var(--line); margin: 0 2px; }
+#ts .stg.done + .stg::before, #ts .stg.failed + .stg::before { background: var(--ink-2); }
+#ts .stg button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; max-width: 320px; }
+#ts .stg button[aria-expanded="true"] { border-color: var(--ink-2); background: var(--raise); }
+#ts .stg .stl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ts .stg .sts { color: var(--ink-2); font-size: 11.5px; }
+#ts .stg.failed button { border-color: rgba(229,83,75,.5); background: var(--red-wash); }
+#ts .stg.running button { border-color: rgba(144,133,233,.6); background: var(--violet-wash); }
+#ts .stg.waiting button, #ts .stg.skipped button { opacity: .65; }
+#ts .stg.byai button { box-shadow: inset 3px 0 0 var(--violet); }
+#ts .stg.aimon button { border-color: var(--violet); background: var(--violet-wash); box-shadow: 0 0 0 2px rgba(183,166,255,.25); }
+#ts .stgtext { margin-top: 10px; padding: 9px 12px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line); }
+#ts .stgtext pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13.5px; color: var(--ink-2); }
+@keyframes stg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { #ts .stg { animation: none; } }
+/* runs started by a monitor the AI suggested */
+#ts .chip.aimon { background: var(--violet-wash); color: var(--violet-ink); border: 1px solid var(--violet); }
+#ts .chip.airule { background: var(--violet-wash); color: var(--violet-ink); }
+#ts .chip.check.green { color: var(--green); }
+#ts .chip.check.red { color: var(--red); }
+#ts .chip.check.amber { color: var(--amber); }
+#ts .chip.check.violet { color: var(--violet-ink); }
+#ts tr.from-aimon td { background: var(--violet-wash); }
+#ts tr.from-aimon td:first-child { box-shadow: inset 3px 0 0 var(--violet); }
+#ts .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--ink-2); margin: 0 0 8px; }
+#ts .legend .sw { display: inline-block; width: 14px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+#ts .legend .sw.aimon { background: var(--violet-wash); box-shadow: inset 3px 0 0 var(--violet); border: 1px solid rgba(183,166,255,.4); }
+#ts .aimon-banner { margin: 0 0 10px; padding: 9px 13px; border-radius: 8px; border: 1px solid var(--violet); background: var(--violet-wash); font-size: 14px; }
+#ts .aimon-banner a { color: var(--violet-ink); margin-left: 6px; }
+#ts .runh.aimon { box-shadow: inset 4px 0 0 var(--violet); }
+#ts .prop.mon.aimon { box-shadow: inset 3px 0 0 var(--violet); }
+
+/* how it works: the whole flow, drawn and played */
+#ts .flow .head p { max-width: 80ch; }
+#ts .fbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 12px; }
+#ts .fbar .seg { margin: 0; }
+#ts .fout button { font-size: 13px; }
+#ts .fctl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; }
+#ts .fgrid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 14px; align-items: start; }
+#ts .fchart { padding: 10px; overflow-x: auto; }
+#ts .fsvg { display: block; width: 100%; min-width: 760px; height: auto; }
+#ts .fsvg .flane { fill: var(--muted); font-size: 10.5px; letter-spacing: .14em; font-weight: 600; }
+#ts .fnode { cursor: pointer; transition: opacity .3s; }
+#ts .fnode rect { fill: var(--surface-2); stroke: var(--line-2); stroke-width: 1.5; transition: fill .3s, stroke-width .2s; }
+#ts .fnode .ft { fill: var(--ink); font-size: 13px; font-weight: 600; text-anchor: middle; }
+#ts .fnode .fs { fill: var(--ink-2); font-size: 11px; text-anchor: middle; }
+#ts .fnode.k-trigger rect { stroke: var(--blue); }
+#ts .fnode.k-person rect { stroke: var(--green); }
+#ts .fnode.k-change rect { stroke: var(--amber); }
+#ts .fnode.k-decide rect { stroke: var(--ink-2); stroke-dasharray: 5 3; }
+#ts .fnode.k-ai rect { stroke: var(--violet); }
+#ts .fnode.k-learn rect { stroke: var(--violet); stroke-dasharray: 5 3; }
+#ts .fnode.k-end rect { stroke: var(--ink); }
+#ts .fnode.lit rect { fill: var(--raise); }
+#ts .fnode.lit.k-trigger rect { fill: var(--blue-wash); }
+#ts .fnode.lit.k-person rect { fill: var(--green-wash); }
+#ts .fnode.lit.k-change rect { fill: var(--amber-wash); }
+#ts .fnode.lit.k-ai rect, #ts .fnode.lit.k-learn rect { fill: var(--violet-wash); }
+#ts .fnode.now rect { stroke-width: 3; filter: url(#fglow); animation: fnode-now 1.6s ease-in-out infinite; }
+#ts .fnode.picked rect { stroke-width: 3; }
+#ts .fnode.dim { opacity: .42; }
+#ts .fnode:focus-visible { outline: none; }
+#ts .fnode:focus-visible rect { stroke-width: 3; stroke: var(--ink); }
+#ts .fsvg .aimon-tag { opacity: 0; transition: opacity .3s; }
+#ts .fsvg .aimon-tag.on { opacity: 1; }
+#ts .fsvg .aimon-tag rect { fill: var(--violet); stroke: none; }
+#ts .fsvg .aimon-tag text { fill: #16132e; font-size: 10.5px; font-weight: 700; text-anchor: middle; }
+#ts .fedge { fill: none; stroke: var(--line-2); stroke-width: 1.6; transition: stroke .3s, opacity .3s; }
+#ts .fedge.e-learn { stroke-dasharray: 6 4; }
+#ts .fedge.e-person { stroke-dasharray: 2 4; }
+#ts .fedge.lit { stroke: var(--ink-2); stroke-width: 2.4; stroke-dasharray: 8 5; animation: fedge-run 1.2s linear infinite; }
+#ts .fedge.dim { opacity: .35; }
+#ts .fsvg marker path { fill: var(--ink-2); }
+#ts .ftoken { fill: var(--blue); }
+#ts .ftoken.ai { fill: var(--violet); }
+@keyframes fnode-now { 50% { stroke-opacity: .55; } }
+@keyframes fedge-run { to { stroke-dashoffset: -26; } }
+@media (prefers-reduced-motion: reduce) { #ts .fnode.now rect, #ts .fedge.lit { animation: none; } }
+#ts .flegend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--ink-2); margin: 8px 4px 2px; }
+#ts .flegend .sw { display: inline-block; width: 14px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1.5px solid var(--line-2); background: var(--surface-2); }
+#ts .flegend .sw.k-trigger { border-color: var(--blue); }
+#ts .flegend .sw.k-person { border-color: var(--green); }
+#ts .flegend .sw.k-change { border-color: var(--amber); }
+#ts .flegend .sw.k-decide { border-style: dashed; border-color: var(--ink-2); }
+#ts .flegend .sw.k-ai { border-color: var(--violet); }
+#ts .flegend .sw.k-learn { border-style: dashed; border-color: var(--violet); }
+#ts .flegend .sw.k-end { border-color: var(--ink); }
+#ts .flegend .sw.aimon { background: var(--violet); border-color: var(--violet); }
+#ts .fjenk { margin: 10px 4px 2px; font-size: 13px; }
+#ts .fjenk ol { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 0; }
+#ts .fjenk li { display: flex; align-items: center; padding: 4px 9px; border-radius: 5px; border: 1px solid var(--line-2); color: var(--muted); background: var(--surface-2); transition: all .3s; }
+#ts .fjenk li + li { margin-left: 16px; position: relative; }
+#ts .fjenk li + li::before { content: ""; position: absolute; left: -14px; width: 12px; height: 2px; background: var(--line-2); }
+#ts .fjenk li.lit { color: var(--ink); border-color: var(--green); background: var(--green-wash); }
+#ts .fjenk li.lit.byai { border-color: var(--violet); background: var(--violet-wash); }
+#ts .fjenk li.lit.aimon { border-color: var(--violet); background: var(--violet); color: #16132e; font-weight: 600; }
+#ts .fside { position: sticky; top: 12px; display: grid; gap: 10px; }
+#ts .fdoc { background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ink-2); border-radius: 8px; padding: 12px 14px; }
+#ts .fdoc.k-trigger { border-left-color: var(--blue); }
+#ts .fdoc.k-person { border-left-color: var(--green); }
+#ts .fdoc.k-change { border-left-color: var(--amber); }
+#ts .fdoc.k-ai, #ts .fdoc.k-learn { border-left-color: var(--violet); }
+#ts .fdoc h3 { margin: 2px 0 6px; font-size: 16px; }
+#ts .fdoc p { margin: 0 0 8px; font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+#ts .fdoc .fnow { color: var(--ink); font-size: 14.5px; }
+#ts .fdoc .fkind { font-size: 10.5px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+#ts .fdoc .fwhere { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); margin: 0; }
+#ts .fsteps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; max-height: 52vh; overflow-y: auto; }
+#ts .fsteps button { display: block; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 6px 9px; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+#ts .fsteps button b { display: block; color: var(--ink-2); font-size: 13px; }
+#ts .fsteps button span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#ts .fsteps li.done button b { color: var(--ink); }
+#ts .fsteps li.now button { border-color: var(--line-2); background: var(--surface-2); color: var(--ink-2); }
+#ts .fsteps button:hover { background: var(--surface-2); }
+#ts .freal { margin-top: 14px; }
+#ts .freal .seg { margin: 8px 0 0; }
+#ts .freal .seg button { font-size: 13px; max-width: 100%; }
+#ts .freal .seg button small { color: var(--muted); font-weight: 400; }
+#ts .freal .seg button.aimon { border-color: var(--violet); box-shadow: inset 3px 0 0 var(--violet); }
+#ts .fdocs { display: grid; gap: 10px; margin-top: 14px; }
+#ts .fdocs summary { cursor: pointer; list-style: revert; }
+#ts .fdocs summary h2 { display: inline; font-size: 16px; }
+#ts .fdocs p { max-width: 90ch; line-height: 1.55; color: var(--ink-2); }
+#ts .fdocs p b { color: var(--ink); }
+@media (max-width: 1060px) { #ts .fgrid { grid-template-columns: 1fr; } #ts .fside { position: static; } #ts .fctl { margin-left: 0; } }

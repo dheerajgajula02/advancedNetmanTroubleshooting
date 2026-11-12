@@ -198,7 +198,15 @@ def cleared_at_confirm(record: dict) -> bool:
 
 def _tried(record: dict) -> dict:
     return {"rule": record["rule"]["id"], "title": record["rule"].get("title"), "position": record["rule"].get("position", "main"), "mode": record["mode"],
-            "result": record["result"], "steps": record["steps"], **({"jenkins": record["jenkins"]} if record.get("jenkins") else {})}
+            "source": record["rule"].get("source"), "result": record["result"], "steps": record["steps"], **({"jenkins": record["jenkins"]} if record.get("jenkins") else {})}
+
+
+WATCH_ONLY = "Only watch-only rules ran, so nothing was decided. What each one found is shown with it."
+
+
+def learned(chain: list) -> bool:
+    """Whether a rule the AI wrote is among these: such a run takes the first look before its rules, and the AI checks it before the AI fixes it."""
+    return any(rule.source.by == "ai" for rule in chain)
 
 
 def run_chain(chain: list, event: dict) -> dict:
@@ -213,8 +221,15 @@ def run_chain(chain: list, event: dict) -> dict:
         if record["result"]["kind"] == "cause" or (rule.position == "main" and cleared_at_confirm(record)):
             final = record
             break
+    decided = final is not None
     final = final or main or attempts[-1]
+    if not decided and final is not main and final["mode"] == "shadow" and final["result"]["kind"] != "stop":
+        # Nothing decided and no main rule ran, so the last record stands for the run. A watch-only rule's cause must not
+        # become the run's: a repair would answer it, and the AI would be told the rules had found it.
+        final["watch_only_result"] = final["result"]
+        final["result"] = {"kind": "stop", "target": "", "params": {}, "step": "end", "text": WATCH_ONLY}
     final["tried"] = [_tried(r) for r in attempts if r is not final]
+    final["order"] = [r["rule"]["id"] for r in attempts]
     return final
 
 

@@ -632,14 +632,22 @@ _LAST_LOCK = threading.Lock()
 _ALIVE = {"at": 0.0}
 
 
-def fired_event(spec: dict, result: dict, now: float, why: str = "") -> dict:
-    """The event a monitor raises: investigated like a trap, on the monitor's device."""
+def origin(row: dict) -> dict:
+    """Who put a monitor in place: the AI, through a suggestion a person accepted, or a person."""
+    return {"by": "ai" if row.get("proposal") else "person", "proposal": row.get("proposal"), "accepted_by": row.get("by") or "", "accepted": row.get("created"),
+            "from_run": row.get("run_id") or ""}
+
+
+def fired_event(spec: dict, result: dict, now: float, why: str = "", made: dict | None = None) -> dict:
+    """The event a monitor raises: investigated like a trap, on the monitor's device. made is origin(row)."""
     from ts.intake import event_for
     values = "; ".join(f"{name} = {value:.10g}" for name, value in result["values"].items() if value is not None)
     event = event_for("monitor.fired", spec["device"], f"monitor {spec['id']}", f"Monitor fired: {spec['title']}",
                       f"Monitor {spec['id']} fired", f"{describe(spec)} Values now: {values}." + (f" Why this monitor exists: {why}" if why else ""),
                       monitor=spec["id"], merge_key=f"monitor:{spec['id']}", monitor_values=result["values"])
     event.update(source="monitor", time=now, trap_time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)))
+    if made:
+        event["monitor_origin"] = dict(made)
     if spec.get("interface"):
         event["interface"] = spec["interface"]
     if spec.get("tags"):
@@ -707,7 +715,7 @@ class Watch:
                         self.log(f"monitor {spec['id']}: held back, {jobs[0]} is running")
                     cooled = mem["last_fired"] is None or now - mem["last_fired"] >= spec["cooldown_minutes"] * 60
                     if not mem["fired"] and not mem["held_back"] and now - mem["since"] >= spec["hold_seconds"] and cooled and not self.own_change():
-                        event = fired_event(spec, result, now, row.get("why") or "")
+                        event = fired_event(spec, result, now, row.get("why") or "", origin(row))
                         from ts import engine
                         run_id = engine.incident_id(event)
                         note(spec["id"], "fired", "Conditions held, so a run was started.", result, run_id, path=self.path)

@@ -107,7 +107,10 @@ def _summary(rec: dict) -> dict:
             "steps": len(rec["steps"]), "rule": rec["rule"]["id"], "repair": (rec.get("repair") or {}).get("status"), "ai": bool(rec.get("analysis")),
             "agent": ai.get("status"), "agent_outcome": ai.get("outcome"), "agent_steps": len(ai.get("calls") or []), "agent_changes": len(ai.get("changes") or []), "agent_proposals": len(ai.get("proposals") or []), "agent_doing": _doing(ai), "source": ev.get("source"), "handled": (rec.get("handled") or {}).get("at"),
             "state": state, "by": by, "headline": ai.get("root_cause") or rec["result"].get("text") or rec["result"].get("label") or rec["result"]["kind"],
-            "took": max(0.0, (ai.get("finished") or rec.get("finished") or ev["time"]) - ev["time"]), "emailed": bool((rec.get("email") or {}).get("sent")), "pattern": (rec.get("pattern") or {}).get("verdict")}
+            "took": max(0.0, (ai.get("finished") or rec.get("finished") or ev["time"]) - ev["time"]), "emailed": bool((rec.get("email") or {}).get("sent")), "pattern": (rec.get("pattern") or {}).get("verdict"),
+            "monitor": ev.get("monitor"), "ai_monitor": (ev.get("monitor_origin") or {}).get("by") == "ai", "learned": bool(rec.get("learned")),
+            "check": (rec.get("check") or {}).get("verdict") if (rec.get("check") or {}).get("status") != "working" else "checking",
+            "jenkins_run": (rec.get("jenkins_run") or {}).get("url")}
 
 
 def summaries(root: Path = DATA_DIR) -> list[dict]:

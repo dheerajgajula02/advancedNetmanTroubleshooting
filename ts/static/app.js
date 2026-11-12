@@ -11,7 +11,7 @@ const ROOT = document.getElementById("ts");
 const BASE = ROOT.dataset.api || "";   /* where the api lives: "" here, "/troubleshooting/" inside Netman */
 /* the sidebar has one entry per group; each group's pages are the tabs across the top */
 const GROUPS = [
-  {key: "incidents", href: "#/", tabs: [["now", "Now", "#/"], ["failures", "History", "#/failures"]]},
+  {key: "incidents", href: "#/", tabs: [["now", "Now", "#/"], ["failures", "History", "#/failures"], ["flow", "How it works", "#/flow"]]},
   {key: "rules", href: "#/review", tabs: [["review", "Review", "#/review"], ["rules", "Rules", "#/rules"], ["tags", "Tags", "#/tags"]]},
   {key: "monitors", href: "#/monitors", tabs: [["monitors", "Monitors", "#/monitors"], ["mdash", "Dashboard", "#/monitors/dashboard"]]},
   {key: "ai", href: "#/models", tabs: [["models", "Models", "#/models"], ["collect", "Collect", "#/collect"], ["aidata", "Data", "#/ai-data"], ["train", "Train", "#/train"]]},
@@ -311,6 +311,331 @@ async function openStep(id, n) {
   } catch (e) { toast(e.message, true); }
 }
 
+/* ---------- how it works: the whole flow, drawn and played ---------- */
+/* nodes: x, y (centre), title, line under it, kind (sets the colour) */
+const FLOW_NODES = {
+  ticket: [90, 150, "Ticket", "a person writes in", "trigger"],
+  trap: [90, 280, "SNMP trap", "link, BGP, OSPF, VRRP", "trigger"],
+  monitor: [90, 410, "Monitor", "Prometheus conditions", "trigger"],
+  sweep: [90, 540, "Heartbeat", "every 20 minutes", "trigger"],
+  desk: [250, 150, "Service desk", "asks what it needs", "person"],
+  confirm: [250, 280, "Wait and merge", "2 min, one run a burst", "rules"],
+  holds: [250, 410, "Holds long enough", "once per episode", "rules"],
+  checks: [250, 540, "Health checks", "what fails right now", "rules"],
+  pick: [410, 340, "Pick the rules", "by kind and tags", "rules"],
+  first: [490, 480, "First look", "back to known-good", "change"],
+  rules: [570, 340, "Rules in Jenkins", "one build per rule", "rules"],
+  repair: [730, 340, "Repair in Jenkins", "safe? change, verify", "change"],
+  context: [890, 340, "Context", "past runs, memory", "rules"],
+  needai: [1050, 340, "Does the AI look?", "the hand-over rules", "decide"],
+  check: [1050, 480, "AI check", "is it still broken?", "ai"],
+  agent: [1050, 620, "Support agent", "investigates, fixes", "ai"],
+  report: [1195, 340, "Report", "read, email, ticket", "end"],
+  suggest: [1195, 70, "Suggestions", "rules, monitors, tags", "learn"],
+  review: [890, 70, "Review", "a person decides", "person"],
+  install: [570, 70, "Installed", "rule + pipeline, monitor", "learn"],
+};
+const NW = 140, NH = 50;
+/* edges: from, to, path (null = straight), kind */
+const FLOW_EDGES = [
+  ["ticket", "desk"], ["trap", "confirm"], ["monitor", "holds"], ["sweep", "checks"],
+  ["desk", "pick", "M320,150 C365,150 380,250 395,315"], ["confirm", "pick", "M320,280 C350,280 360,330 340,340"], ["holds", "pick", "M320,410 C350,410 360,350 340,340"], ["checks", "pick", "M320,540 C370,540 400,450 405,365"],
+  ["pick", "rules"], ["pick", "first", "M410,365 C410,440 420,480 420,480"], ["first", "rules", "M560,480 C575,480 570,420 570,365"],
+  ["rules", "repair"], ["repair", "context"], ["rules", "context", "M580,315 C640,240 840,240 880,315"],
+  ["context", "needai"], ["needai", "report"], ["needai", "check"], ["needai", "agent", "M985,350 C930,420 930,600 980,620"],
+  ["check", "report", "M1120,480 C1170,480 1185,430 1185,365"], ["check", "agent"], ["agent", "report", "M1120,620 C1240,620 1250,470 1215,365"],
+  ["report", "suggest", null, "learn"], ["suggest", "review", null, "learn"], ["review", "install", null, "learn"],
+  ["install", "pick", "M520,95 C470,190 420,230 410,315", "learn"], ["install", "monitor", "M500,70 L12,70 Q4,70 4,78 L4,402 Q4,410 12,410 L20,410", "learn"],
+  ["report", "desk", "M1150,315 C1120,215 1090,215 1050,215 L330,215 C300,215 290,200 290,175", "person"],
+];
+const flowEdgeKey = (a, b) => `${a}>${b}`;
+function flowEdgePath([a, b, d]) {
+  if (d) return d;
+  const [x1, y1] = FLOW_NODES[a], [x2, y2] = FLOW_NODES[b];
+  if (y1 === y2) return `M${x1 + (x2 > x1 ? NW / 2 : -NW / 2)},${y1} L${x2 + (x2 > x1 ? -NW / 2 : NW / 2)},${y2}`;
+  if (x1 === x2) return `M${x1},${y1 + (y2 > y1 ? NH / 2 : -NH / 2)} L${x2},${y2 + (y2 > y1 ? -NH / 2 : NH / 2)}`;
+  return `M${x1},${y1} L${x2},${y2}`;
+}
+const FLOW_KIND = {trigger: "Something starts a run", person: "A person", rules: "Rules and checks", change: "Changes the network", decide: "A decision", ai: "The AI", end: "The end of a run", learn: "Learning for next time"};
+/* what each box is, for the panel beside the chart */
+const FLOW_DOCS = {
+  ticket: ["Someone writes in on the service desk. A ticket goes to the support agent with everything it needs, and nothing is settled until the person says they can see it working.", "Service desk :8771, ts/desk.py, ts/tickets.py"],
+  trap: ["A device sends an SNMP trap: a port went down, a BGP or OSPF neighbour dropped, a VRRP master moved. Traps are read from the trap log as they arrive.", "ts/intake.py"],
+  monitor: ["A monitor watches Prometheus numbers and starts a run when its conditions hold. It counts only what happened after it was accepted, fires once per episode, and stays quiet while a test job is changing the network. A monitor the AI suggested is marked AI monitor everywhere its runs appear.", "ts/monitors.py, Monitors page, Grafana dashboard"],
+  sweep: ["Every 20 minutes the watcher checks the whole network the same way a person would: can each host reach what it should, are the neighbours up.", "ts/sweep.py"],
+  desk: ["The desk talks to the person, asks only what it needs, and passes everything on through the ticket. When the work is done it tells them and asks if they can see it working.", "ts/desk.py"],
+  confirm: ["A trap is looked at 2 minutes after it arrives, so a flap that settles by itself is seen as one. Alarms about the same thing that arrive close together become one run.", "intake.Waiting, CONFIRM_DELAY 120 s"],
+  holds: ["The conditions must hold for the monitor's hold time before it fires, then it waits for its cooldown before it can fire again.", "monitors.Watch"],
+  checks: ["The sweep's checks say what is failing right now. Each failure becomes an event, investigated like a trap.", "ts/sweep.py"],
+  pick: ["The rules that cover this kind of event, or carry the monitor's tags, run in order: those placed at the beginning, the main rule, those at the end. A watch-only rule runs and is recorded but decides nothing. If any rule here was written by the AI, the first look comes before them.", "engine.chain_for"],
+  first: ["Only before rules the AI wrote: has anything moved from known-good? Each device's config is compared with the golden config. Whatever differs and nothing on record explains is put back first, as its own repair build, so those rules start from the network as it is meant to be.", "pipeline.before_rules, firstlook"],
+  rules: ["Each rule is a pipeline in Jenkins, troubleshooting-pipelines. Every step is a stage: the troubleshooter runs the check and the build decides where the rule goes next. A rule ends with a cause, a stop, or a call for someone to look.", "jenkins_runs.py, pipelines.py"],
+  repair: ["A cause with a repair rule gets its own Jenkins build: is it safe to change, the change, did it work, then keep it or undo it. It holds the network change lock from the change to the end. It is held back while a deployment or a test job is running.", "fixer.py, troubleshooting-pipelines"],
+  context: ["What else was going on: Jenkins, GitHub, Prometheus, Grafana and the data lake, every earlier run like this one, and the AI's own notes. Then the pattern: how often this has happened today and this week.", "sources/, history.py, rag.py"],
+  needai: ["The AI takes over when a ticket has no rule, when the rules ran out or asked for someone, when they found a cause but have no repair, or when the repair failed. It does not for things only a person can fix, like a dead link, nor while a job is changing the network. After rules the AI wrote, the AI check always comes first.", "agent.needed"],
+  check: ["After rules the AI wrote, a model that cannot change anything looks at whether the trouble is still there: at most 8 reads and 4 minutes, then working, still broken, or unsure. Working ends the run there. Only otherwise does the support agent start. Its model is chosen on the AI models page, under AI check.", "aicheck.py"],
+  agent: ["The support agent reads, tests and changes the network. Every change is tried with its own check and undone if the check does not pass. It has 30 reads, 12 changes or suggestions, 3 changes a run and 6 an hour, and 10 minutes, 15 on a ticket. At most 8 sessions an hour, and the same problem on the same device goes to a person within half an hour.", "agent.py, tools.py"],
+  report: ["If anything needs saying, a model reads the whole run and it is emailed. A run that cleared by itself or that the AI check found working is not emailed, unless it keeps coming back. A ticket goes back to the desk, which asks the person to confirm.", "report.py, analyst.py"],
+  suggest: ["The support agent may suggest a rule that would have solved this without it, and after every run with a cause the AI looks for a monitor that would have caught it sooner. Nothing is installed until a person accepts it.", "review.py, monitor_ai.py"],
+  review: ["A person reads each suggestion with its proof: what the rule would have done on past runs, how often a monitor would have fired. Accept, or reject with a reason the AI sees next time.", "Rules & review page"],
+  install: ["An accepted rule is checked and gets its Jenkins pipeline straight away. An accepted monitor starts watching from that moment. Next time, the rules handle it, and the AI only checks.", "rulebook.py, pipelines.sync, monitors.add"],
+};
+/* the stories: each step is a box and what is happening there; the edge to it is taken from the box before */
+const FLOW_STORIES = {
+  ticket: {name: "Ticket", lead: "Someone writes in on the service desk.", outcomes: {
+    fixed: ["The AI fixes it", [
+      ["ticket", "A person writes in: they cannot reach a web site from their computer."],
+      ["desk", "The desk asks what it needs to know, like which computer and since when, and opens the ticket."],
+      ["pick", "No rule covers a ticket like this yet, so nothing is checked before the AI."],
+      ["rules", "Rules that cover tickets of this kind would run here, each as a Jenkins build."],
+      ["context", "Every earlier run like this, the AI's notes, and what Jenkins, GitHub and Prometheus saw lately."],
+      ["needai", "A person wrote in and no rule covers it, so the support agent takes it."],
+      ["agent", "It reads, tests, finds the cause and tries a fix with its own check. The fix stays only because the check passed."],
+      ["report", "The run is written up and emailed. The ticket goes back to the desk."],
+      ["desk", "The desk tells the person and asks if they can see it working. Only their answer settles the ticket."],
+      ["suggest", "The agent suggests a rule that would have solved this without it."],
+      ["review", "A person reads the suggestion with its proof and accepts it."],
+      ["install", "The rule is installed and gets its own Jenkins pipeline. Next time the rules handle it."]]],
+    person: ["It needs a person", [
+      ["ticket", "A person writes in: the office has had no internet since this morning."],
+      ["desk", "The desk asks what it needs and opens the ticket."],
+      ["pick", "No rule covers it."],
+      ["rules", "Nothing to run here."],
+      ["context", "Past runs show the same border lost its ISP before."],
+      ["needai", "A person wrote in, so the support agent takes it."],
+      ["agent", "Both borders are up but the ISP is silent. Nothing on our side can fix that, so it ends as needs a person, with what it found."],
+      ["report", "Emailed as NEEDS YOU. The ticket goes back to the desk."],
+      ["desk", "The desk tells the person what is happening and that an engineer has it."]]],
+  }},
+  trap: {name: "Trap", lead: "A device sends an SNMP trap.", outcomes: {
+    repaired: ["The rules repair it", [
+      ["trap", "r3 sends linkDown for Ethernet2."],
+      ["confirm", "Wait 2 minutes, so a flap that settles counts once. The link is still down."],
+      ["pick", "The link-down rule covers this event."],
+      ["rules", "Its Jenkins build checks the port, the far end and the config: Ethernet2 was shut down by hand, and nothing on record explains it."],
+      ["repair", "The repair build: safe to change? Yes. Put the config back to known-good. Did it work? The link is up. Keep it."],
+      ["context", "Gathered for the record: past runs and what else happened."],
+      ["needai", "The rules found the cause and fixed it, so the AI is not needed."],
+      ["report", "Emailed as FIXED, with what was changed and why."]]],
+    noFix: ["No repair, the AI takes over", [
+      ["trap", "r4 sends linkDown, then linkUp, again and again."],
+      ["confirm", "Merged into one run after 2 minutes."],
+      ["pick", "The flapping rule covers this."],
+      ["rules", "Its build finds a link that keeps dropping, with errors on the port."],
+      ["context", "This port flapped twice this week."],
+      ["needai", "The rules found the cause, but no rule can repair it."],
+      ["agent", "It moves traffic off the port with an OSPF cost change, held as a temporary stop-gap, and says the port needs a person."],
+      ["report", "Emailed: the stop-gap holds, and someone has to look at the hardware."],
+      ["suggest", "It suggests a monitor on this port's error rate, so it is caught sooner next time."],
+      ["review", "A person accepts the monitor."],
+      ["install", "The monitor starts watching from now. Only what happens after this moment counts."],
+      ["monitor", "From now on this monitor can start runs of its own, marked AI monitor."]]],
+  }},
+  monitor: {name: "AI monitor", lead: "A monitor the AI suggested starts the run.", outcomes: {
+    working: ["The AI check finds it working", [
+      ["monitor", "The AI monitor on s4's uplink sees the link flapping. It is marked AI monitor, in the run list, on the run page and in Jenkins."],
+      ["holds", "The flapping holds for the hold time, so it fires, once for this episode."],
+      ["pick", "The rules carrying this monitor's tags run. They were written by the AI, so the first look comes first."],
+      ["first", "Has anything moved from known-good? Nothing has, so nothing is put back."],
+      ["rules", "The AI's rules run as Jenkins builds and find the link flapping."],
+      ["context", "Past runs, memory, sources."],
+      ["needai", "The rules found the cause but have no repair. The rules were the AI's, so the AI checks first."],
+      ["check", "It reads how long the link has been up and whether it dropped again: up for twelve minutes, no drops. Working."],
+      ["report", "Working, so the support agent never starts. Not emailed, unless it keeps coming back."]]],
+    broken: ["Still broken, the support agent starts", [
+      ["monitor", "The AI monitor on r4 sees packet loss on its transit link. Marked AI monitor."],
+      ["holds", "It holds, so the monitor fires."],
+      ["pick", "The AI's rules for this monitor's tags. The first look comes first."],
+      ["first", "r4's config differs from known-good and nothing explains it, so it is put back first, as its own repair build."],
+      ["rules", "The AI's rules run and find loss with no errors on the port."],
+      ["context", "Past runs, memory, sources."],
+      ["needai", "A cause and no repair. The AI checks first."],
+      ["check", "Loss is still there in the last minute. Still broken."],
+      ["agent", "The support agent takes over, within its limits, and works it like any other run."],
+      ["report", "Written up and emailed with what the agent did."]]],
+  }},
+  sweep: {name: "Heartbeat", lead: "The 20-minute sweep finds something failing.", outcomes: {
+    quiet: ["Nothing really wrong", [
+      ["sweep", "The heartbeat checks every host and neighbour."],
+      ["checks", "h2 failed one reach test."],
+      ["pick", "The reachability rule covers this."],
+      ["rules", "It confirms first, and h2 reaches everything now. The run stops at the confirm step and is not kept, so nothing piles up."]]],
+    cause: ["It finds a cause", [
+      ["sweep", "The heartbeat checks every host and neighbour."],
+      ["checks", "h4 cannot reach the internet."],
+      ["pick", "The internet rule covers this."],
+      ["rules", "Both borders reach the internet but h4 does not: its default route is gone."],
+      ["repair", "A repair rule puts the default route back from known-good, and the check passes."],
+      ["context", "Past runs and sources."],
+      ["needai", "Fixed by the rules."],
+      ["report", "Emailed as FIXED."]]],
+  }},
+};
+/* the Jenkins stages a story's boxes show as, in troubleshooting-run */
+const FLOW_STAGE = {ticket: "Trigger", trap: "Trigger", monitor: "Trigger", sweep: "Trigger", first: "First look", rules: "Rules", repair: "Repair", check: "AI check", agent: "AI support agent", report: "Report"};
+
+function flowSvg() {
+  const nodes = Object.entries(FLOW_NODES).map(([id, [x, y, t, sub, kind]]) => `<g class="fnode k-${kind}" data-node="${id}" tabindex="0" role="button" aria-label="${esc(t)}: ${esc(sub)}" transform="translate(${x - NW / 2},${y - NH / 2})">
+      <rect width="${NW}" height="${NH}" rx="10"></rect><text x="${NW / 2}" y="21" class="ft">${esc(t)}</text><text x="${NW / 2}" y="37" class="fs">${esc(sub)}</text>${id === "monitor" ? `<g class="aimon-tag"><rect x="${NW - 30}" y="-9" width="38" height="16" rx="4"></rect><text x="${NW - 11}" y="3">AI</text></g>` : ""}</g>`).join("");
+  const edges = FLOW_EDGES.map(e => `<path class="fedge ${e[3] ? "e-" + e[3] : ""}" id="fe-${e[0]}-${e[1]}" data-edge="${flowEdgeKey(e[0], e[1])}" d="${flowEdgePath(e)}" marker-end="url(#farrow)"></path>`).join("");
+  const lanes = `<text class="flane" x="20" y="105">START</text><text class="flane" x="370" y="300">RULES · JENKINS</text><text class="flane" x="990" y="300">AI</text><text class="flane" x="510" y="32">LEARNING</text>`;
+  return `<svg class="fsvg" viewBox="0 0 1280 680" role="img" aria-labelledby="flow-title">
+    <title id="flow-title">How a run goes, from what starts it to the report and what is learned</title>
+    <defs><marker id="farrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,1 L9,5 L0,9 z"></path></marker>
+      <filter id="fglow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4" result="b"></feGaussianBlur><feMerge><feMergeNode in="b"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge></filter></defs>
+    ${lanes}<g class="fedges">${edges}</g><g class="fnodes">${nodes}</g><circle class="ftoken" r="7" cx="-20" cy="-20" filter="url(#fglow)"></circle></svg>`;
+}
+const F = {story: "monitor", outcome: "working", steps: [], i: -1, playing: false, speed: 1, timer: 0, raf: 0, real: null};
+function flowSteps() {
+  if (F.real) return F.real.steps;
+  const s = FLOW_STORIES[F.story];
+  return s.outcomes[F.outcome][1];
+}
+function flowDoc(id, line = "") {
+  const [, , t, sub, kind] = FLOW_NODES[id], [what, where] = FLOW_DOCS[id];
+  return `<div class="fdoc k-${kind}"><span class="fkind">${esc(FLOW_KIND[kind])}</span><h3>${esc(t)}</h3>${line ? `<p class="fnow">${esc(line)}</p>` : ""}<p>${esc(what)}</p><p class="fwhere">${esc(where)}</p></div>`;
+}
+function flowDraw() {
+  const steps = flowSteps(), i = F.i, seen = new Set(), went = new Set();
+  steps.slice(0, i + 1).forEach(([id], k) => { seen.add(id); if (k) went.add(flowEdgeKey(steps[k - 1][0], id)); });
+  $$(".fnode").forEach(n => { n.classList.toggle("lit", seen.has(n.dataset.node)); n.classList.toggle("now", i >= 0 && steps[i][0] === n.dataset.node); n.classList.toggle("dim", i >= 0 && !seen.has(n.dataset.node)); });
+  $$(".fedge").forEach(e => { e.classList.toggle("lit", went.has(e.dataset.edge)); e.classList.toggle("dim", i >= 0 && !went.has(e.dataset.edge)); });
+  $$(".fsvg .aimon-tag").forEach(t => t.classList.toggle("on", F.story === "monitor" && !F.real || !!(F.real && F.real.aiMonitor)));
+  $("#f-steps").innerHTML = steps.map(([id, line], k) => `<li class="${k < i ? "done" : k === i ? "now" : ""}"><button type="button" data-fstep="${k}"><b>${esc(FLOW_NODES[id][2])}</b><span>${esc(line)}</span></button></li>`).join("");
+  $$("#f-steps [data-fstep]").forEach(b => b.onclick = () => { flowStop(); flowGo(+b.dataset.fstep, false); });
+  $("#f-doc").innerHTML = i >= 0 ? flowDoc(steps[i][0], steps[i][1]) : `<div class="fdoc"><h3>${esc(F.real ? F.real.title : FLOW_STORIES[F.story].lead)}</h3><p>Press Play to follow it box by box, or step through it. Select any box to read what it does.</p></div>`;
+  const stages = [];
+  steps.slice(0, Math.max(i + 1, 0)).forEach(([id]) => { const s = FLOW_STAGE[id]; if (s && stages[stages.length - 1] !== s) stages.push(s); });
+  const all = [];
+  steps.forEach(([id]) => { const s = FLOW_STAGE[id]; if (s && all[all.length - 1] !== s) all.push(s); });
+  $("#f-jenk").innerHTML = all.map((s, k) => `<li class="${k < stages.length ? "lit" : ""} ${s.startsWith("AI") ? "byai" : ""} ${s === "Trigger" && (F.story === "monitor" && !F.real || F.real && F.real.aiMonitor) ? "aimon" : ""}">${esc(s === "Trigger" && (F.story === "monitor" && !F.real || F.real && F.real.aiMonitor) ? "Trigger: AI monitor" : s)}</li>`).join("");
+  $("#f-play").textContent = F.playing ? "Pause" : i >= steps.length - 1 && i >= 0 ? "Play again" : "Play";
+  $("#f-prev").disabled = i <= 0; $("#f-next").disabled = i >= steps.length - 1;
+  $("#flow-live").textContent = i >= 0 ? `${FLOW_NODES[steps[i][0]][2]}: ${steps[i][1]}` : "";
+}
+function flowToken(path, done) {
+  const tok = $(".ftoken");
+  if (!path || reduced || !tok) { done(); return; }
+  const len = path.getTotalLength(), dur = Math.max(350, Math.min(1100, len * 2.2)) / F.speed, t0 = performance.now();
+  tok.classList.toggle("ai", path.dataset.edge.endsWith(">check") || path.dataset.edge.endsWith(">agent"));
+  const tick = now => {
+    const k = Math.min(1, (now - t0) / dur), e = k < .5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2, p = path.getPointAtLength(len * e);
+    tok.setAttribute("cx", p.x); tok.setAttribute("cy", p.y);
+    if (k < 1) F.raf = requestAnimationFrame(tick); else done();
+  };
+  cancelAnimationFrame(F.raf);
+  F.raf = requestAnimationFrame(tick);
+}
+function flowGo(k, animate) {
+  const steps = flowSteps();
+  if (k < 0 || k >= steps.length) return;
+  const from = F.i >= 0 && k === F.i + 1 ? steps[F.i][0] : null, to = steps[k][0];
+  const path = from ? document.querySelector(`.fedge[data-edge="${flowEdgeKey(from, to)}"]`) : null;
+  const land = () => {
+    F.i = k;
+    const [x, y] = FLOW_NODES[to], tok = $(".ftoken");
+    if (tok) { tok.setAttribute("cx", x); tok.setAttribute("cy", y - NH / 2 - 2); }
+    flowDraw();
+    if (F.playing) F.timer = setTimeout(() => k + 1 < steps.length ? flowGo(k + 1, true) : (F.playing = false, flowDraw()), 2300 / F.speed);
+  };
+  if (animate && path) flowToken(path, land); else land();
+}
+function flowStop() { F.playing = false; clearTimeout(F.timer); cancelAnimationFrame(F.raf); }
+function flowPlay() {
+  if (F.playing) { flowStop(); flowDraw(); return; }
+  const steps = flowSteps();
+  F.playing = true;
+  if (F.i >= steps.length - 1) { F.i = -1; }
+  flowGo(F.i + 1, true);
+  flowDraw();
+}
+function flowPick(story, outcome) {
+  flowStop();
+  F.real = null; F.story = story; F.outcome = outcome || Object.keys(FLOW_STORIES[story].outcomes)[0]; F.i = -1;
+  $$("#f-stories [data-story]").forEach(b => b.setAttribute("aria-pressed", b.dataset.story === story));
+  $("#f-outcomes").innerHTML = Object.entries(FLOW_STORIES[story].outcomes).map(([k, [label]]) => `<button type="button" data-outcome="${k}" aria-pressed="${k === F.outcome}">${esc(label)}</button>`).join("");
+  $$("#f-outcomes [data-outcome]").forEach(b => b.onclick = () => flowPick(F.story, b.dataset.outcome));
+  $$("#f-real [data-real]").forEach(b => b.setAttribute("aria-pressed", "false"));
+  flowDraw();
+}
+/* a real run, mapped onto the same boxes from the stages it recorded */
+const FLOW_FROM = {ticket: ["ticket", "desk"], trap: ["trap", "confirm"], health: ["sweep", "checks"], monitor: ["monitor", "holds"]};
+async function flowReal(id) {
+  flowStop();
+  const rec = await api("api/incidents/" + encodeURIComponent(id));
+  const src = FLOW_FROM[rec.event.source] || FLOW_FROM.trap, steps = [], st = rec.stages || [];
+  const say = p => (p && p.text ? p.text.split("\n").filter(Boolean).slice(0, 2).join(" ") : "");
+  steps.push([src[0], say(st[0]) || rec.event.title || ""], [src[1], rec.event.title || ""]);
+  steps.push(["pick", st.filter(p => p.key.startsWith("rule:")).map(p => p.label.replace(/^Rule: /, "")).join(", ") || "No rule covers it."]);
+  const first = st.find(p => p.key === "first_look");
+  if (first) steps.push(["first", say(first)]);
+  const ruleParts = st.filter(p => p.key.startsWith("rule:") && p.key !== "rule:none");
+  if (ruleParts.length) steps.push(["rules", ruleParts.map(p => `${p.label.replace(/^Rule: /, "")}: ${(p.text.split("\n").pop() || "").replace(/^Ended: /, "")}`).join(" · ")]);
+  const fix = st.find(p => p.key === "repair");
+  if (fix) steps.push(["repair", say(fix)]);
+  steps.push(["context", rec.similar && rec.similar.length ? `${plural(rec.similar.length, "similar run")} found.` : "Past runs, memory and sources gathered."]);
+  const chk = st.find(p => p.key === "check"), ag = st.find(p => p.key === "agent");
+  steps.push(["needai", rec.agent ? (rec.agent.why || "The AI was needed.") : chk ? "The AI checked after rules it wrote." : "The rules dealt with it, so the AI was not needed."]);
+  if (chk) steps.push(["check", say(chk)]);
+  if (ag) steps.push(["agent", say(ag)]);
+  steps.push(["report", say(st.find(p => p.key === "report")) || "Concluded."]);
+  if (rec.event.source === "ticket") steps.push(["desk", "The desk takes the answer back to the person."]);
+  F.real = {steps, title: `${rec.event.title || rec.id}, ${dfmt(rec.event.time)} ${hm(rec.event.time)}`, aiMonitor: !!rec.ai_monitor};
+  F.i = -1;
+  $$("#f-stories [data-story]").forEach(b => b.setAttribute("aria-pressed", "false"));
+  $("#f-outcomes").innerHTML = `<span class="muted">A real run: <a href="#/run/${esc(rec.id)}">open it</a>${rec.jenkins_run && rec.jenkins_run.url ? ` · <a href="${esc(rec.jenkins_run.url)}" target="_blank" rel="noreferrer">its Jenkins build &#8599;</a>` : ""}</span>`;
+  $$("#f-real [data-real]").forEach(b => b.setAttribute("aria-pressed", b.dataset.real === id));
+  flowPlay();
+}
+const FLOW_SECTIONS = [
+  ["What can start a run", `<p>Four things, and nothing else: a <b>trap</b> from a device, a <b>ticket</b> on the service desk, the <b>heartbeat</b> sweep every 20 minutes, and an accepted <b>monitor</b>. A trap waits 2 minutes before it is looked at, so a flap that settles counts once, and alarms about the same thing that arrive together become one run. A monitor fires once per episode, counts only what happened after it was accepted, and never fires while a test job or our own change is changing the network.</p>`],
+  ["Rules, and where they run", `<p>Every rule is a pipeline in Jenkins, in <b>troubleshooting-pipelines</b>, written from the rule and rewritten whenever it changes. Each step is a stage: the troubleshooter runs the check with its lab access and its scrubbing, and the build decides where the rule goes. If Jenkins cannot take a build within a minute, the rule runs in the troubleshooter instead and the run says so.</p><p>Rules placed at the beginning run first, then the main rule, then those at the end. A <b>watch-only</b> rule runs and is recorded but decides nothing: its finding is shown with it, never used as the run's answer.</p>`],
+  ["Known-good, and the first look", `<p>The golden configs are known-good. A difference with no recorded reason is put back. A deliberate earlier change, like an OSPF stop-gap kept for failing hardware, is never undone blindly.</p><p>Before rules the AI wrote, the run takes a <b>first look</b>: has anything moved from known-good? Whatever has, and nothing explains, is put back first as its own repair build, so the AI's rules always start from the network as it is meant to be.</p>`],
+  ["Repairs", `<p>A cause with a repair rule gets its own Jenkins build: <i>Safe to change?</i>, the change, <i>Did it work?</i>, then keep it or undo it. It holds the network change lock from the change to the end, and if the build stops part-way, the troubleshooter undoes the change and lets go of the lock itself. A repair is held back while a deployment or test job is running; tampering or failing hardware is still emailed, once a day.</p>`],
+  ["When the AI comes in", `<p>The <b>support agent</b> takes over when a ticket has no rule, when the rules ran out or asked for someone, when they found a cause with no repair, or when the repair failed. It stays out of what only a person can fix (a dead link, a silent ISP) and out of anything a job is changing.</p><p>After rules the AI wrote, the <b>AI check</b> always comes first: a model that cannot change anything decides whether it is still broken, in at most 8 reads and 4 minutes. Working ends the run. Still broken, or unsure, starts the support agent, within its limits: 8 sessions an hour, and the same problem on the same device only once in half an hour.</p><p>Every change the agent makes is a transaction with its own check: kept only if the check passes, undone otherwise. Each AI job's model is chosen on the AI models page.</p>`],
+  ["Reports and email", `<p>If anything needs saying, a model reads the whole run and it is emailed: FIXED, FIXED BY AI, NEEDS YOU. A run that cleared by itself, or that the AI check found working, is not emailed unless the same thing keeps coming back. Tickets go back to the desk, and only the person's answer to “can you see it working?” settles them.</p>`],
+  ["How it learns", `<p>The support agent may suggest a rule that would have handled this without it, and after every run with a cause the AI looks for a monitor that would have caught it sooner. Nothing goes in until a person accepts it on the Review page, seeing what the rule would have done on past runs and how often the monitor would have fired. A rule gets its Jenkins pipeline straight away; a monitor watches from that moment. The next time, the rules handle it and the AI only checks.</p>`],
+  ["Where to see it", `<p><b>Now</b> and <b>History</b> list every run. A run started by a monitor the AI suggested is highlighted in violet and marked <span class="chip aimon">AI monitor</span>; runs where the AI's rules ran say <span class="chip airule">AI rules</span> and what the AI check found. Each run's page shows its stages in order, the same stages as its <b>troubleshooting-run</b> build in Jenkins, where the build's name starts with [AI monitor] for those runs. The rules' and repairs' own builds are linked from each stage.</p>`],
+];
+async function pageFlow() {
+  setNav("flow");
+  naming("How it works");
+  $("#main").innerHTML = `<div class="wrap flow">
+    <div class="head"><h1>How it works</h1><p>Everything that happens between an alarm and the report, as it runs today. Pick what starts the run and press Play, or replay a real run.</p></div>
+    <div class="fbar">
+      <div class="seg" id="f-stories" role="group" aria-label="What starts the run">${Object.entries(FLOW_STORIES).map(([k, s]) => `<button type="button" data-story="${k}" aria-pressed="false">${esc(s.name)}</button>`).join("")}</div>
+      <div class="seg fout" id="f-outcomes" role="group" aria-label="How it ends"></div>
+      <span class="fctl"><button class="btn go" id="f-play" type="button">Play</button><button class="btn" id="f-prev" type="button">Back</button><button class="btn" id="f-next" type="button">Forward</button>
+        <span class="speed" role="group" aria-label="Speed">${[1, 2].map(n => `<button type="button" data-fspeed="${n}" aria-pressed="${F.speed === n}">${n}×</button>`).join("")}</span></span>
+    </div>
+    <div class="fgrid">
+      <div class="fchart panel">${flowSvg()}
+        <div class="flegend">${Object.entries(FLOW_KIND).map(([k, t]) => `<span><i class="sw k-${k}"></i>${esc(t)}</span>`).join("")}<span><i class="sw aimon"></i>Started by an AI monitor</span></div>
+        <div class="fjenk"><b>In Jenkins</b> <span class="muted">troubleshooting-run, one build per run, its stages as they happen</span><ol id="f-jenk"></ol></div>
+      </div>
+      <aside class="fside"><div id="f-doc"></div><ol class="fsteps" id="f-steps"></ol></aside>
+    </div>
+    <section class="panel freal"><h2>Replay a real run</h2><p class="muted">The latest runs, drawn on the same boxes from the stages they recorded.</p><div class="seg" id="f-real"><span class="muted">Loading</span></div></section>
+    <div class="fdocs">${FLOW_SECTIONS.map(([t, body], k) => `<details class="panel" ${k < 2 ? "open" : ""}><summary><h2>${esc(t)}</h2></summary>${body}</details>`).join("")}</div>
+    <div class="sr" aria-live="polite" id="flow-live"></div>
+  </div>`;
+  $$("#f-stories [data-story]").forEach(b => b.onclick = () => flowPick(b.dataset.story));
+  $("#f-play").onclick = flowPlay;
+  $("#f-prev").onclick = () => { flowStop(); flowGo(F.i - 1, false); };
+  $("#f-next").onclick = () => { flowStop(); flowGo(F.i + 1, true); };
+  $$("[data-fspeed]").forEach(b => b.onclick = () => { F.speed = +b.dataset.fspeed; $$("[data-fspeed]").forEach(x => x.setAttribute("aria-pressed", x === b)); });
+  $$(".fnode").forEach(n => {
+    const show = () => { if (F.playing) return; $$(".fnode").forEach(x => x.classList.toggle("picked", x === n)); $("#f-doc").innerHTML = flowDoc(n.dataset.node); };
+    n.onclick = show; n.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); show(); } };
+  });
+  flowPick(F.story, F.outcome);
+  try {
+    const runs = (await api("api/incidents")).slice(0, 8);
+    $("#f-real").innerHTML = runs.length ? runs.map(r => `<button type="button" data-real="${esc(r.id)}" aria-pressed="false" class="${r.ai_monitor ? "aimon" : ""}" title="${esc(r.headline)}"><span class="led ${stateOf(r.state).c}"></span>${esc(r.title)} <small>${esc(ago(r.time))}</small></button>`).join("") : `<span class="muted">No runs yet.</span>`;
+    $$("#f-real [data-real]").forEach(b => b.onclick = () => flowReal(b.dataset.real).catch(e => toast(e.message, true)));
+  } catch (e) { $("#f-real").innerHTML = `<span class="muted">The runs could not be loaded: ${esc(e.message)}</span>`; }
+}
+
 /* ---------- routing ---------- */
 function parseHash() {
   const [path, qs] = location.hash.replace(/^#\/?/, "").split("?");
@@ -318,6 +643,7 @@ function parseHash() {
 }
 async function route() {
   stopReplay();
+  flowStop();
   closeDrawer(true);
   clearInterval(S.poll);
   const {path, q} = parseHash();
@@ -328,6 +654,7 @@ async function route() {
     if (path === "failures") { if (wasFailures) { S.q = q; syncFilters(); return loadRuns(q); } return pageFailures(q); }
     const m = path.match(/^(?:run|incident)\/(.+)$/);
     if (m) return await pageRun(decodeURIComponent(m[1]));
+    if (path === "flow") return await pageFlow();
     if (path === "review") return await pageReview(q);
     if (path === "rules") return await pageRules();
     if (path === "tags") return await pageTags();
@@ -766,7 +1093,7 @@ async function pageFailures(q) {
     </div>
     <div class="flayout">
       <details class="tagbox" id="f-tagbox" ${matchMedia("(min-width: 1121px)").matches ? "open" : ""}><summary>Tags</summary><div class="areas" id="f-tags"></div></details>
-      <div><div class="bulk" id="f-bulk" hidden></div><div class="tblwrap" id="f-wrap"><table class="tbl" id="f-table"></table></div><div class="pager" id="f-pager"></div></div>
+      <div><div class="bulk" id="f-bulk" hidden></div><p class="legend" id="f-legend" hidden><span><i class="sw aimon"></i>Started by a monitor the AI suggested</span><span><span class="chip airule">AI rules</span> rules the AI wrote ran</span><span><span class="chip check">AI check</span> what the AI found when it checked after them</span></p><div class="tblwrap" id="f-wrap"><table class="tbl" id="f-table"></table></div><div class="pager" id="f-pager"></div></div>
     </div></div>`;
   let typing;
   $("#f-q").oninput = e => { clearTimeout(typing); typing = setTimeout(() => withFilter({q: e.target.value.trim()}, true), 180); };
@@ -833,14 +1160,16 @@ function drawRuns(d, q) {
   $("#f-table").innerHTML = d.items.length ? `<thead><tr>${S.picking ? '<th class="c-pick"><span class="sr">Choose</span></th>' : ""}${th("state", "State")}${th("time", "When")}${th("device", "Device")}${th("title", "What happened")}<th>Tags</th>${th("by", "Handled by")}${th("took", "Took", "th-took")}</tr></thead>
     <tbody>${d.items.map(r => {
       const st = stateOf(r.state);
-      return `<tr data-run="${esc(r.id)}">${S.picking ? `<td class="c-pick"><input type="checkbox" data-pick="${esc(r.id)}" aria-label="Choose ${esc(r.title)}" ${S.picked.has(r.id) ? "checked" : ""}></td>` : ""}
+      return `<tr data-run="${esc(r.id)}" class="${r.ai_monitor ? "from-aimon" : ""}">${S.picking ? `<td class="c-pick"><input type="checkbox" data-pick="${esc(r.id)}" aria-label="Choose ${esc(r.title)}" ${S.picked.has(r.id) ? "checked" : ""}></td>` : ""}
         <td class="c-state"><span class="led ${st.c}"></span>${esc(st.t)}</td>
         <td class="c-when" title="${esc(dfmt(r.time))}, ${esc(tfmt(r.time))}">${esc(ago(r.time))}</td>
         <td class="c-dev"><a href="#/failures?device=${encodeURIComponent(r.device)}" style="text-decoration:none">${esc(r.device)}</a></td>
-        <td class="c-what"><a href="#/run/${esc(r.id)}">${esc(r.title)}</a>${r.ticket ? ` <span class="chip">Ticket T-${esc(r.ticket)}</span>` : ""}<small>${esc(r.headline)}</small></td>
+        <td class="c-what"><a href="#/run/${esc(r.id)}">${esc(r.title)}</a>${r.ticket ? ` <span class="chip">Ticket T-${esc(r.ticket)}</span>` : ""}${r.ai_monitor ? ` <span class="chip aimon" title="Started by monitor ${esc(r.monitor)}, which the AI suggested">AI monitor ${esc(r.monitor)}</span>` : ""}${r.learned ? ` <span class="chip airule" title="Rules the AI wrote ran in this run">AI rules</span>` : ""}${checkChip(r.check)}<small>${esc(r.headline)}</small></td>
         <td class="c-tags"><div class="chips">${r.tags.map(t => `<span class="chip" title="${esc(t)}">${esc(t.split("/").pop())}</span>`).join("")}</div></td>
         <td class="c-by">${byWord(r.by)}</td><td class="c-took">${esc(span(r.took))}</td></tr>`;
     }).join("")}</tbody>` : `<tbody><tr><td><div class="empty">No runs match these filters. <button class="text-btn" type="button" id="f-none">Clear filters</button></div></td></tr></tbody>`;
+  const legend = $("#f-legend");
+  if (legend) legend.hidden = !d.items.some(r => r.ai_monitor || r.learned);
   if ($("#f-none")) $("#f-none").onclick = () => { location.hash = "#/failures"; };
   $$("#f-table th button").forEach(b => b.onclick = () => {
     const k = b.dataset.sort, nextDir = sort === k ? (dir === "asc" ? "desc" : "asc") : (k === "time" || k === "took" ? "desc" : "asc");
@@ -994,6 +1323,36 @@ function doneLines(rec) {
   if (rec.email) out.push(rec.email.sent ? "Emailed." : `Not emailed: ${esc(rec.email.why)}.`);
   return out;
 }
+const CHECK_WORDS = {working: ["AI check: working", "green"], broken: ["AI check: still broken", "red"], unsure: ["AI check: unsure", "amber"], checking: ["AI checking", "violet"]};
+function checkChip(v) {
+  const c = CHECK_WORDS[v];
+  return c ? ` <span class="chip check ${c[1]}" title="After the rules the AI wrote, the AI checked whether it was still broken">${esc(c[0])}</span>` : "";
+}
+/* the parts of the run in order, the same stages its troubleshooting-run build shows in Jenkins */
+const STAGE_TONE = {done: "green", failed: "red", running: "violet", waiting: "off", skipped: "off"};
+const STAGE_WORDS = {done: "Done", failed: "Did not work", running: "Running", waiting: "Waiting", skipped: "Skipped"};
+function stageStrip(rec) {
+  const list = rec.stages || [];
+  if (!list.length) return "";
+  const jr = rec.jenkins_run || {};
+  const jlink = jr.url ? `<a href="${esc(jr.url)}" target="_blank" rel="noreferrer">troubleshooting-run #${esc(jr.number)} &#8599;</a>` : jr.error ? `<span class="muted">Not in Jenkins: ${esc(jr.error)}</span>` : "";
+  const open = S.stageOpen;
+  const item = (p, k) => {
+    const marks = [p.ai_monitor ? '<span class="chip aimon">AI monitor</span>' : "", p.ai ? '<span class="ai">AI</span>' : "", p.watch_only ? '<span class="chip">watch-only</span>' : "",
+      ["check", "agent"].includes(p.key) ? '<span class="ai">AI</span>' : ""].join("");
+    return `<li class="stg ${p.state} ${p.ai_monitor ? "aimon" : ""} ${p.ai || ["check", "agent"].includes(p.key) ? "byai" : ""}" style="--i:${k}">
+      <button type="button" data-stage="${k}" aria-expanded="${open === k}"><span class="led ${STAGE_TONE[p.state] || "off"} ${p.state === "running" ? "pulse" : ""}"></span><span class="stl">${esc(p.label.replace(/^(Rule|Repair|Trigger|First look): /, ""))}</span>${marks}<span class="sts">${esc(STAGE_WORDS[p.state] || p.state)}</span></button></li>`;
+  };
+  const shown = list[open];
+  return `<section class="panel stages"><h2>How this run went <small>the same stages as in Jenkins</small>${jlink ? `<span class="jl">${jlink}</span>` : ""}</h2>
+    <ol class="strip">${list.map(item).join("")}</ol>
+    ${shown ? `<div class="stgtext"><b>${esc(shown.label)}</b>${shown.link ? ` <a href="${esc(shown.link)}" target="_blank" rel="noreferrer">its build &#8599;</a>` : ""}<pre>${esc(shown.text || "")}</pre></div>` : '<p class="sub muted">Choose a stage to see what it found.</p>'}</section>`;
+}
+function aiMonitorBanner(rec) {
+  const m = rec.ai_monitor;
+  if (!m) return "";
+  return `<div class="aimon-banner"><span class="chip aimon">AI monitor ${esc(rec.event.monitor || "")}</span> ${esc(rec.started_by || "")}${m.from_run ? ` <a href="#/run/${esc(m.from_run)}">The run it came from</a>.` : ""} <a href="#/monitors">Monitors</a></div>`;
+}
 /* the two questions asked before anything was changed */
 function firstLook(rec) {
   const f = rec.first_look;
@@ -1008,11 +1367,11 @@ function standing(rec) {
   const a = rec.analysis || {}, ai = rec.agent || {}, f = rec.repair || {};
   const next = a.next && a.next.toLowerCase() !== "nothing" ? a.next : "";
   switch (rec.state) {
-    case "fixed": return rec.by === "ai" ? `Fixed by the AI, and the change was kept. ${next}` : `Fixed and verified. ${next}`;
+    case "fixed": return rec.by === "ai" ? `Fixed by the AI, and the change was kept. ${next}` : `Fixed and verified.${rec.check && rec.check.verdict === "working" ? " The AI checked afterwards and agreed it is working." : ""} ${next}`;
     case "workaround": return `A temporary change is keeping this working, and known-good will not undo it for now. Someone still has to do the real repair. ${next}`;
     case "handled": return `${String(rec.handled.by).startsWith("review:") ? `You accepted suggestion #${rec.handled.by.slice(7)}` : "You marked this handled"} ${ago(rec.handled.at)}. ${next}`;
-    case "cleared": return ai.status === "not_needed" ? "It had already cleared when the AI's turn came." : "It went away by itself. Nothing more to do.";
-    case "working": return ai.status === "queued" ? "Waiting for the AI to start." : "The AI is working on this now. This page follows along.";
+    case "cleared": return ai.status === "not_needed" ? (rec.check ? `The AI checked after the rules it wrote and found it working, so the support agent was not started. ${rec.check.summary || ""}` : "It had already cleared when the AI's turn came.") : "It went away by itself. Nothing more to do.";
+    case "working": return rec.check && rec.check.status === "working" ? "The AI is checking whether it is still broken. Only if it is does the support agent start." : ai.status === "queued" ? (rec.learned && !rec.check ? "Waiting for the AI to check whether it is still broken." : "Waiting for the AI to start.") : "The AI is working on this now. This page follows along.";
     case "held": return `The repair was held back. ${f.why || ""}`;
     case "watching": return `This repair is in watch-only mode, so it did not run. ${f.why || ""}`;
     case "info": return "Recorded for reference. Nothing needs doing.";
@@ -1029,7 +1388,7 @@ async function pageRun(id) {
     if (document.hidden || S.playing || !S.rec || S.rec.id !== id || S.rec.state !== "working") return;
     try {
       const fresh = await api("api/incidents/" + encodeURIComponent(id));
-      if (JSON.stringify(fresh.agent) !== JSON.stringify(S.rec.agent) || fresh.state !== S.rec.state) showRun(fresh);
+      if (JSON.stringify(fresh.agent) !== JSON.stringify(S.rec.agent) || fresh.state !== S.rec.state || JSON.stringify(fresh.stages) !== JSON.stringify(S.rec.stages)) showRun(fresh);
     } catch (e) { /* the next tick tries again */ }
   }, 4000);
 }
@@ -1051,7 +1410,7 @@ function jenkinsRuns(rec) {
 }
 function showRun(rec) {
   const openWas = S.drawer;
-  if (!S.rec || S.rec.id !== rec.id) S.showReads = false;
+  if (!S.rec || S.rec.id !== rec.id) { S.showReads = false; S.stageOpen = null; }
   S.rec = rec; S.rule = rec.rule; S.frames = buildFrames(rec); S.pos = lastFrame();
   const ev = rec.event, st = stateOf(rec.state), a = rec.analysis, [vt, vx] = verdictWords(rec.result), ai = rec.agent;
   const total = (ai && ai.finished || rec.finished || ev.time) - ev.time;
@@ -1059,7 +1418,8 @@ function showRun(rec) {
   const act = ["needs_you", "workaround"].includes(rec.state) ? `<button class="btn go" id="r-handled" type="button">Mark handled</button>` : rec.state === "handled" ? `<button class="btn" id="r-unhandle" type="button">Put back in the queue</button>` : "";
   $("#main").innerHTML = `<div class="wrap">
     ${backLink()}
-    <header class="runh ${st.c}">
+    ${aiMonitorBanner(rec)}
+    <header class="runh ${st.c} ${rec.ai_monitor ? "aimon" : ""}">
       <div class="runtop"><div>
         <div class="state"><span class="led ${st.c} ${rec.state === "working" ? "pulse" : ""}"></span>${esc(st.t)}${rec.by === "ai" ? ' <span class="ai">AI</span>' : ""}</div>
         <h1>${esc(evTitle(ev))}</h1>${ev.ticket ? `<p class="muted">Started by ticket ${ticketLink(ev.ticket)} on the service desk</p>` : ""}
@@ -1068,6 +1428,7 @@ function showRun(rec) {
       ${(rec.tags || []).length ? `<div class="chips">${rec.tags.map(t => `<a class="chip" href="#/failures?tag=${encodeURIComponent(t)}">${esc(t)}</a>`).join("")}</div>` : ""}
     </header>
     <section class="todo"><h2>${esc(TODO_WORDS[rec.state] || "Where it stands")}</h2><p>${ticks(standing(rec))}</p></section>
+    <div id="stagebox">${stageStrip(rec)}</div>
     ${firstLook(rec)}
     <div class="pair">
       <section class="panel"><h2>What broke</h2><p>${ai && ai.root_cause ? ticks(plainCause(ai.root_cause)) : `<b>${esc(vt)}.</b> ${esc(vx)}`}</p></section>
@@ -1087,6 +1448,13 @@ function showRun(rec) {
     <ol class="map" id="map" aria-label="The route this investigation took"></ol>
     ${afterwards(rec)}
     <p class="rundel" id="delrun"></p></div>`;
+  const stageClicks = () => $$("#stagebox [data-stage]").forEach(b => b.onclick = () => {
+    const k = +b.dataset.stage;
+    S.stageOpen = S.stageOpen === k ? null : k;
+    $("#stagebox").innerHTML = stageStrip(S.rec);
+    stageClicks();
+  });
+  stageClicks();
   if ($("#r-handled")) $("#r-handled").onclick = () => handle([rec.id]);
   if ($("#r-unhandle")) $("#r-unhandle").onclick = async () => { await markHandled([rec.id], false); toast("Put back in the queue."); afterHandled(); };
   $("#play").onclick = () => S.playing ? stopReplay() : play();
@@ -1797,7 +2165,7 @@ function monitorCard(m, d) {
   const panels = `<div class="mcharts" data-live="${esc(sp.id)}"><p class="muted">Loading the graphs</p></div><p class="note">The last 6 hours, read the same way the watcher reads them. The same graphs are on the <a href="#/monitors/dashboard">Grafana dashboard</a>.</p>`;
   const evs = m.events.length ? `<details class="mevents"><summary>What it did lately</summary><ul>${m.events.map(e => `<li><time>${esc(dfmt(e.time))}, ${esc(hm(e.time))}</time> <b>${esc(MON_EVENT[e.kind] || e.kind)}</b> <span class="muted">${esc(e.note || "")}</span>${e.run_id ? ` <a href="#/run/${esc(e.run_id)}">Open the run</a>` : ""}</li>`).join("")}</ul></details>` : "";
   const from = m.proposal ? `<a href="#/review?status=accepted&kind=monitor">Suggestion #${esc(m.proposal)}</a>${m.run_id ? `, from <a href="#/run/${esc(m.run_id)}">a run</a>` : ""}` : `Added by ${esc(m.by || "hand")}`;
-  return `<article class="prop mon" data-mon="${esc(sp.id)}"><header><h2>${esc(sp.title)}</h2><span class="mstate"><span class="led ${paused ? "off" : led}${m.state === "fired" && !paused ? " pulse" : ""}" data-led></span><span data-state>${paused ? "Paused" : esc(stateText)}</span></span></header>
+  return `<article class="prop mon ${m.proposal ? "aimon" : ""}" data-mon="${esc(sp.id)}"><header><h2>${esc(sp.title)}${m.proposal ? ' <span class="chip aimon" title="The AI suggested this monitor and a person accepted it. Runs it starts are marked AI monitor.">AI monitor</span>' : ""}</h2><span class="mstate"><span class="led ${paused ? "off" : led}${m.state === "fired" && !paused ? " pulse" : ""}" data-led></span><span data-state>${paused ? "Paused" : esc(stateText)}</span></span></header>
     ${m.why ? `<p class="why">${esc(m.why)}</p>` : ""}
     ${factRow([["Starts a run on", esc(sp.interface ? `${sp.device} ${sp.interface}` : sp.device)], ["When", monitorConditions(sp)], ["Last looked", `<span data-looked>${m.last_eval ? esc(agoWords(m.last_eval)) : "not yet"}</span>`], ["Came from", from]])}
     ${numbers}${panels}${evs}
@@ -1872,7 +2240,7 @@ async function pageMonitorDashboard() {
 /* ---------- find anything ---------- */
 const PAL = {items: [], at: 0, token: 0, back: null};
 function palStatic() {
-  const pages = [["Now", "#/"], ["History", "#/failures"], ["Waiting for you", "#/failures?state=needs_you"], ["Review", "#/review"], ["Rules", "#/rules"], ["Tags", "#/tags"], ["Monitors", "#/monitors"], ["Monitors dashboard", "#/monitors/dashboard"], ["AI models", "#/models"], ["Collect", "#/collect"], ["Data", "#/ai-data"], ["Train", "#/train"]].map(([t, go]) => ({t, sub: "Page", go}));
+  const pages = [["Now", "#/"], ["History", "#/failures"], ["How it works", "#/flow"], ["Waiting for you", "#/failures?state=needs_you"], ["Review", "#/review"], ["Rules", "#/rules"], ["Tags", "#/tags"], ["Monitors", "#/monitors"], ["Monitors dashboard", "#/monitors/dashboard"], ["AI models", "#/models"], ["Collect", "#/collect"], ["Data", "#/ai-data"], ["Train", "#/train"]].map(([t, go]) => ({t, sub: "Page", go}));
   const devices = (S.now && S.now.map ? S.now.map.nodes : []).map(n => ({t: n.id, sub: `Device, ${n.bad.length ? "failing" : ROLE_WORDS[n.role] || "no problems"}`, dev: n.id, led: n.bad.length ? "red" : ""}));
   const rules = (S.rules ? S.rules.rules : []).filter(r => r.table !== "filter").map(r => ({t: r.title || r.id, sub: "Rule", rule: r.id}));
   const tags = (S.tags || []).map(t => ({t: t.tag, sub: "Tag", go: "#/failures?tag=" + encodeURIComponent(t.tag)}));

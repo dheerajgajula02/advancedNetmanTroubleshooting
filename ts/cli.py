@@ -217,7 +217,7 @@ CONFIRM_DELAY = 120  # seconds after the trap; the traffic window (checks.TRAFFI
 
 def _run_event(rules, event, rerun=False, root=DEFAULT_RULES_DIR, hand_over=None) -> str:
     """Investigate one event. With hand_over, a run for the AI is left queued and passed to it."""
-    from ts import engine, pipeline, store
+    from ts import engine, pipeline, stages, store
     from ts.vocab import FORBIDDEN_DEVICES
     label = f"{event['trap_time']}  {event['device']} {event.get('subject') or event.get('interface')}"
     if event.get("device") in FORBIDDEN_DEVICES:
@@ -225,11 +225,16 @@ def _run_event(rules, event, rerun=False, root=DEFAULT_RULES_DIR, hand_over=None
     if store.exists(engine.incident_id(event)) and not rerun:
         return f"{label}: already investigated"
     chain = engine.chain_for(rules, event)
+    learned = bool(chain) and event.get("source") != "ticket" and engine.learned(chain)
+    first = pipeline.before_rules(event, rules, engine.incident_id(event)) if learned else None  # did anything move from known-good? put it back first
     record = engine.run_chain(chain, event) if chain else engine.no_rule(event)
+    if learned:
+        record.update(learned=True, before_rules=first)
     r = record["result"]
     kept = event.get("source") == "ticket" or not (any(rule.quiet_stops for rule in chain if rule.position == "main") and r["kind"] == "stop")
     if kept:
         pipeline.finish(record, rules, print, inline=hand_over is None, root=root)
+        stages.advance(record)  # its build in troubleshooting-run, as far as the run has got
         store.save(record)
         if hand_over and (record.get("agent") or {}).get("status") == "queued":
             hand_over(record["id"])
@@ -287,7 +292,7 @@ def cmd_watch(args) -> int:
     from ts.intake import TRAPS_LOG, Waiting, events_since, follow, parse_line
     from ts.vocab import FORBIDDEN_DEVICES
 
-    from ts import pipeline, status
+    from ts import pipeline, stages, status
 
     def stamp() -> str:
         return time.strftime("%Y-%m-%d %H:%M:%S")
@@ -312,14 +317,20 @@ def cmd_watch(args) -> int:
             record = store.load(run_id)
             if not record:
                 continue
-            status.update(ai_working={"id": run_id, "title": record["event"].get("title"), "since": time.time()})
-            say(f"{run_id}: the AI is taking over: {record['agent'].get('why')}")
+            checking = pipeline.check_pending(record)
+            status.update(ai_working={"id": run_id, "title": record["event"].get("title"), "since": time.time(), "doing": "check" if checking else "fix"})
+            say(f"{run_id}: " + ("the AI checks whether it is still broken, since rules the AI wrote ran" if checking else f"the AI is taking over: {record['agent'].get('why')}"))
             try:
-                record["agent"]["status"] = "working"
-                store.save(record)
-                pipeline.take_over(record, load_ruleset(args.rules).parsed, say, Path(args.rules))
-                store.save(record)
-                say(f"{run_id}: the AI finished: {record['agent'].get('status')}, {record['agent'].get('outcome')}, {len(record['agent'].get('calls') or [])} steps, {len(record['agent'].get('proposals') or [])} suggestions")
+                def saved(rec):
+                    stages.advance(rec)
+                    store.save(rec)
+                pipeline.take_over(record, load_ruleset(args.rules).parsed, say, Path(args.rules), saved=saved)
+                saved(record)
+                ai = record.get("agent") or {}
+                if ai.get("status") in (None, "not_needed"):
+                    say(f"{run_id}: the support agent was not needed: {ai.get('note') or 'the rules repaired it and the check agreed'}")
+                else:
+                    say(f"{run_id}: the AI finished: {ai.get('status')}, {ai.get('outcome')}, {len(ai.get('calls') or [])} steps, {len(ai.get('proposals') or [])} suggestions")
             except Exception as exc:  # one bad run must not stop the next
                 say(f"{run_id}: the AI failed: {type(exc).__name__}: {exc}")
             status.update(ai_working=None)
@@ -398,7 +409,8 @@ def cmd_watch(args) -> int:
     threading.Thread(target=pipelines.keep_in_step, args=(Path(args.rules), say), daemon=True).start()
     if os.environ.get("TS_JENKINS", "on") != "off":
         jenkins_runs.enable(say)
-        say("rules and repairs run as Jenkins pipelines in troubleshooting-pipelines; here if Jenkins cannot take them")
+        stages.enable(say)
+        say("rules and repairs run as Jenkins pipelines in troubleshooting-pipelines; here if Jenkins cannot take them; each run shows in troubleshooting-run")
 
     from ts import monitor_ai, monitors
     threading.Thread(target=monitors.watch_forever, args=(found.put, say), daemon=True).start()

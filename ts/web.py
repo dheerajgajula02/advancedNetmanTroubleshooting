@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
-from ts import aiconfig, collect, configs, dataset, engine, history, monitor_page, overview, review, rulebook, store, training as fine_tuning
+from ts import aiconfig, collect, configs, dataset, engine, history, monitor_page, overview, review, rulebook, stages, store, training as fine_tuning
 from ts.ruleset import load_ruleset
 from ts.view import state
 
@@ -95,7 +95,8 @@ def make_handler(rules_dir: Path):
             if not record:
                 return None
             state_now, by = store.verdict(record)
-            return as_json({**record, "state": state_now, "by": by, "tags": history.tags_of(record["id"])})
+            return as_json({**record, "state": state_now, "by": by, "tags": history.tags_of(record["id"]), "stages": stages.of(record),
+                            "started_by": stages.badge(record), "ai_monitor": stages.from_ai_monitor(record)})
         m = re.fullmatch(r"/api/rules/([a-z0-9-]+)", path)
         if m:
             loaded = rules().get(m.group(1))

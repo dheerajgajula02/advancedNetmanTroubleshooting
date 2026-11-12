@@ -39,7 +39,9 @@ def should_send(rec: dict) -> bool:
         # doing, but tampering or failing hardware still needs a person to hear about it (once a day per port).
         return loud
     if ai.get("status") == "not_needed":
-        return False  # it cleared by itself, or another run already sorted it out
+        # It cleared by itself, or another run already sorted it out. When the AI's check said so after rules the AI
+        # wrote, a pattern that keeps coming back still reaches a person, once a day.
+        return loud if rec.get("check") else False
     if ai.get("status") in ("done", "failed", "skipped"):
         return True
     if fix:
