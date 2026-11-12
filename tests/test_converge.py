@@ -303,6 +303,25 @@ def test_what_gets_emailed(tmp_path, monkeypatch):
     assert not report.should_send(automation)
 
 
+def test_tampering_is_emailed_even_when_a_deployment_held_the_repair(tmp_path, monkeypatch):
+    monkeypatch.setattr(report, "STATE", tmp_path / "mail.json")
+    held = full("held")
+    held["repair"].update(expected=True, why="A deployment just finished (ci-cd/lab4-change-validation #50), and what it changed may be intended.")
+    assert not report.should_send(held)  # an ordinary fault right after a deployment stays quiet
+    held["pattern"] = {"verdict": "tampering", "note": "The same kind of hand change on s1 Ethernet4 has now happened 2 times in 7 days."}
+    assert report.should_send(held)
+    subject, body = report.compose(held)
+    assert subject.startswith("[SUSPICIOUS]") and "I did not change anything." in body and "A deployment just finished" in body and "hand change" in body
+    (tmp_path / "mail.json").write_text(json.dumps({"sent": [], "keys": {report._pattern_key(held): time.time()}}))
+    assert not report.should_send(held)  # still once a day per port
+    during_job = full("held")
+    during_job["repair"]["expected"] = True
+    during_job["pattern"] = {"verdict": "tampering"}
+    during_job["event"]["change_running"] = True
+    during_job["event"]["subject"] = "Ethernet9"
+    assert not report.should_send(during_job)  # a job was changing the network when it happened: its own doing
+
+
 def test_a_pattern_is_only_reported_once_a_day(tmp_path, monkeypatch):
     monkeypatch.setattr(report, "STATE", tmp_path / "mail.json")
     plain = full(None)

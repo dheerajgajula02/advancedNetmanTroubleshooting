@@ -31,8 +31,13 @@ def _pattern_key(rec: dict) -> str:
 
 def should_send(rec: dict) -> bool:
     r, fix, pattern, ai = rec["result"], rec.get("repair"), rec.get("pattern") or {}, rec.get("agent") or {}
-    if rec["event"].get("change_running") or (fix and fix.get("expected")):
-        return False  # a job was changing the network, and it reports its own failures
+    loud = pattern.get("verdict") in LOUD_PATTERNS and time.time() - _state()["keys"].get(_pattern_key(rec), 0) >= DAY
+    if rec["event"].get("change_running"):
+        return False  # a job was changing the network when it happened, and it reports its own failures
+    if fix and fix.get("expected"):
+        # Held because a deployment had just finished or another job was in the way. That is usually the job's
+        # doing, but tampering or failing hardware still needs a person to hear about it (once a day per port).
+        return loud
     if ai.get("status") == "not_needed":
         return False  # it cleared by itself, or another run already sorted it out
     if ai.get("status") in ("done", "failed", "skipped"):
@@ -41,7 +46,7 @@ def should_send(rec: dict) -> bool:
         return fix["status"] != "already"
     if r["kind"] in ("cause", "escalate") and r.get("label") not in QUIET_LABELS:
         return True
-    return pattern.get("verdict") in LOUD_PATTERNS and time.time() - _state()["keys"].get(_pattern_key(rec), 0) >= DAY
+    return loud
 
 
 def tag(rec: dict) -> str:
