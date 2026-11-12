@@ -12,9 +12,10 @@ from pathlib import Path
 
 import yaml
 
-from ts.lint import Issue, errors, lint
+from ts.lint import Issue, errors, lint, reachable_devices
 from ts.ruleset import load_ruleset
 from ts.schema import MODES, parse_rule
+from ts.vocab import DEVICES
 
 
 class RuleRefused(ValueError):
@@ -38,6 +39,27 @@ def _approved(raw: dict, mode: str, by: str) -> dict:
     return {**raw, "mode": mode, "source": source}
 
 
+def _for_its_platforms(raw: dict) -> dict:
+    """A fix whose change or whose verify works on some kinds of device only (eos, frr, linux) is matched to
+    those kinds, so a cause on any other kind of device looks for the fix written for it instead of picking
+    this one and answering unsupported. A fix that names its platform, role or device already is left alone."""
+    if raw.get("table") != "fix" or any(k in (raw.get("match") or {}) for k in ("platform", "role", "device")):
+        return raw
+    try:
+        rule = parse_rule(copy.deepcopy(raw), raw.get("id", "<rule>"))
+    except Exception:  # noqa: BLE001 - check() reports why it does not parse
+        return raw
+    do = rule.action.do
+    acts_on = do.args.get("device")
+    calls = [do, *(c.check for c in rule.verify if acts_on is not None and c.check.args.get("device") == acts_on)]
+    limited = [set(c.block.platforms) for c in calls if c.block.device_bound]
+    works = set.intersection(*limited) if limited else set()
+    seen = {DEVICES[d][1] for d in reachable_devices(rule.match)}
+    if not works or seen <= works:
+        return raw
+    return {**raw, "match": {**raw["match"], "platform": sorted(works)}}
+
+
 def install(root: Path, raws: list[dict], mode: str, by: str) -> list[str]:
     """Put these rules in, all or none. Returns their ids."""
     if mode not in MODES:
@@ -47,7 +69,7 @@ def install(root: Path, raws: list[dict], mode: str, by: str) -> list[str]:
     taken = [raw["id"] for raw in raws if rs.get(raw["id"])]
     if taken:
         raise RuleRefused(f"Already installed: {', '.join(taken)}.")
-    ready = [_approved(raw, mode, by) for raw in raws]
+    ready = [_for_its_platforms(_approved(raw, mode, by)) for raw in raws]
     parsed, issues = check(root, ready)
     if errors(issues):
         raise RuleRefused("; ".join(i.message for i in errors(issues)))

@@ -6,6 +6,8 @@ description: Delete the netem loss qdisc from r3 eth3 (suggested by the AI)
 match:
   cause:
   - link.netem_loss_on_transit
+  platform:
+  - frr
 mode: active
 position: main
 tags:

@@ -140,3 +140,24 @@ def test_platform_warning():
     vrrp_access = diag(event="vrrp.master_change", match={"event": "vrrp.master_change", "role": "access"},
                        steps=[{"check": "vrrp_split_brain {device} {interface}"}])
     assert not messages(lint(rules(vrrp_access)), "warning")
+
+
+def test_a_fix_that_works_on_one_kind_of_device_is_matched_to_it():
+    """linux_change runs on FRR routers and hosts, link_loss on EOS and FRR: the fix can only ever work on FRR."""
+    from ts import rulebook
+    netem = fix(cause="link.netem_loss_on_transit",
+                action={"do": {"name": "linux_change", "device": "{device}", "argv": ["tc", "qdisc", "del", "dev", "eth3", "root"],
+                               "undo_argv": ["tc", "qdisc", "add", "dev", "eth3", "root", "netem", "loss", "30%"]}},
+                verify=["link_loss {device} eth3 10.0.33.1 == clean"])
+    assert any("does not support eos" in m for m in messages(lint(rules(netem)), "warning"))
+    placed = rulebook._for_its_platforms(netem)
+    assert placed["match"]["platform"] == ["frr"] and not any("does not support" in m for m in messages(lint(rules(placed)), "warning"))
+
+
+def test_a_fix_that_works_everywhere_or_names_its_place_is_left_alone():
+    from ts import rulebook
+    anywhere = fix()  # config_lines and interface_status work on EOS and FRR alike
+    assert rulebook._for_its_platforms(anywhere) == anywhere
+    named = fix(match={"cause": "interface.admin_shut", "device": "r3"},
+                action={"do": {"name": "linux_change", "device": "{device}", "argv": ["ip", "link", "set", "eth1", "up"], "undo_argv": ["ip", "link", "set", "eth1", "down"]}})
+    assert rulebook._for_its_platforms(named) == named
