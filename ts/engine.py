@@ -160,11 +160,21 @@ def run(rule: DiagnoseRule, event: dict) -> dict:
     return RUN_RULE(rule, event)
 
 
+def event_tags(event: dict) -> tuple[str, ...]:
+    """What an event is about: the tags of its kind, and the tags it carries itself.
+
+    Only a monitor's event carries its own (what that monitor watches for), so a rule written for
+    the same trouble runs when the monitor fires, and no other rule does.
+    """
+    own = tuple(t for t in event.get("tags") or [] if isinstance(t, str))
+    return tuple(dict.fromkeys((*tag_book.for_event(event.get("event", "")), *own)))
+
+
 def _applies(rule, event: dict) -> bool:
     for key, wanted in rule.match.items():
         patterns = wanted if isinstance(wanted, list) else [wanted]
         if key == "tags":
-            if not tag_book.covers(patterns, tag_book.for_event(event.get("event", ""))):
+            if not tag_book.covers(patterns, event_tags(event)):
                 return False
         elif not any(fnmatchcase(str(event.get(key, "")), p) for p in patterns):
             return False

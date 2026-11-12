@@ -88,6 +88,17 @@ def test_a_rule_only_runs_for_its_tags():
     assert [r.id for r in engine.chain_for(rules(extra("other", "end", match={"tags": ["routing/ospf"]}), MAIN), EVENT)] == ["the-main"]
 
 
+def test_a_monitor_runs_the_rules_written_for_what_it_watches():
+    fired = {"event": "monitor.fired", "device": "s4", "interface": "Ethernet1", "subject": "monitor s4-flap", "time": 1_800_000_000.0, "platform": "eos",
+             "role": "access", "source": "monitor", "monitor": "s4-flap", "tags": ["link/flap", "routing/ospf"]}
+    flap = extra("flap-rule", "end", match={"tags": ["service/internet", "link/flap"]})
+    other = extra("dhcp-rule", "beginning", match={"tags": ["service/dhcp"]})
+    by_kind = diag("by-kind", mode="active", match={"event": "interface.down"}, steps=[{"check": "interface_status {device} {interface}", "then": {"down": "cause interface.no_link"}}], causes={"interface.no_link": "No link."})
+    assert [r.id for r in engine.chain_for(rules(flap, other, by_kind), fired)] == ["flap-rule"]
+    assert [r.id for r in engine.chain_for(rules(flap, other, by_kind), {**fired, "tags": []})] == []  # a monitor with no tags runs no rule
+    assert engine.event_tags(EVENT) == ("link/port",)  # every other event is about what its kind says
+
+
 def test_proposed_and_retired_rules_never_run():
     assert [r.id for r in engine.chain_for(rules(extra("rule-a", "end", mode="proposed"), extra("rule-b", "end", mode="retired"), MAIN), EVENT)] == ["the-main"]
 
