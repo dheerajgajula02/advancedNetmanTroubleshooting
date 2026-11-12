@@ -272,17 +272,25 @@ def _serve() -> str:
 def _reap_forever() -> None:
     while True:
         time.sleep(30)
-        now = time.time()
-        for sid, s in list(_SESSIONS.items()):
-            try:
-                if s.kind == "fix" and not s.done.is_set() and s.holder and now - s.last > STALE:
-                    with s.calls:
+        _reap_once()
+
+
+def _reap_once() -> None:
+    """Undo a repair whose build went quiet holding the lock, and forget old builds."""
+    now = time.time()
+    for sid, s in list(_SESSIONS.items()):
+        try:
+            if s.kind == "fix" and not s.done.is_set() and s.holder and now - s.last > STALE and s.calls.acquire(blocking=False):
+                try:  # a stage still running is not a quiet build, however long it takes
+                    if not s.done.is_set() and s.holder and time.time() - s.last > STALE:
                         _LOG(f"Jenkins build {s.pipeline} #{s.number} went quiet holding the change lock; undoing here")
                         _abandon(s, f"The Jenkins build said nothing for {STALE} s.")
-                if now - s.created > KEEP_SESSIONS:
-                    _SESSIONS.pop(sid, None)
-            except Exception as exc:  # the reaper must keep going
-                _LOG(f"reaping {sid} failed: {type(exc).__name__}: {exc}")
+                finally:
+                    s.calls.release()
+            if now - s.created > KEEP_SESSIONS:
+                _SESSIONS.pop(sid, None)
+        except Exception as exc:  # the reaper must keep going
+            _LOG(f"reaping {sid} failed: {type(exc).__name__}: {exc}")
 
 
 # --- starting a build and waiting for it -----------------------------------------------

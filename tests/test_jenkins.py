@@ -260,11 +260,13 @@ def test_a_quiet_build_holding_the_lock_is_undone_by_the_reaper(monkeypatch, rep
     s.last = time.time() - jenkins_runs.STALE - 1
     jenkins_runs._SESSIONS[s.id] = s
     try:
-        with s.calls:  # what one pass of the reaper does
-            jenkins_runs._abandon(s, "quiet")
+        with s.calls:  # a stage that is still running, however long, is not a quiet build
+            jenkins_runs._reap_once()
+        assert state["undone"] == 0 and state["locked"] == 1 and s.repair.done is None
+        jenkins_runs._reap_once()
     finally:
         jenkins_runs._SESSIONS.pop(s.id, None)
-    assert state["undone"] == 1 and state["locked"] == 0 and s.repair.done["status"] == "failed"
+    assert state["undone"] == 1 and state["locked"] == 0 and s.repair.done["status"] == "failed" and s.done.is_set()
 
 
 # --- every build, searchable for the AI ------------------------------------------------
