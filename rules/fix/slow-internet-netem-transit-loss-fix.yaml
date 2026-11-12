@@ -1,0 +1,53 @@
+id: slow-internet-netem-transit-loss-fix
+title: Delete the netem loss qdisc from r3 eth3
+table: fix
+priority: 100
+description: Delete the netem loss qdisc from r3 eth3 (suggested by the AI)
+match:
+  cause:
+  - link.netem_loss_on_transit
+mode: active
+position: main
+tags:
+- service/internet
+- link/loss
+source:
+  by: ai
+  incident: 20261109T045747Z-h2-ticket
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-12T00:19:45'
+require:
+- change_window_open == closed
+action:
+  do:
+    name: linux_change
+    args:
+      argv:
+      - tc
+      - qdisc
+      - del
+      - dev
+      - eth3
+      - root
+      device: '{device}'
+      undo_argv:
+      - tc
+      - qdisc
+      - add
+      - dev
+      - eth3
+      - root
+      - netem
+      - loss
+      - 30%
+verify:
+- check:
+    name: link_loss
+    args:
+      device: '{device}'
+      interface: eth3
+      target: 10.0.33.1
+  expect:
+  - clean
+risk: low

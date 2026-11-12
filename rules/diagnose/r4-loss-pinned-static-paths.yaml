@@ -1,0 +1,93 @@
+id: r4-loss-pinned-static-paths
+pipeline: r4-loss-pinned-static-paths
+title: 'r4 link-loss alarm: identify static paths pinned to the failed s4 link'
+table: diagnose
+priority: 100
+description: "After normal link-loss checks confirm loss and exclude injected netem\
+  \ impairment, identify the r4\u2013s4 physical-down state together with s4's configured\
+  \ IPv4 default and r4's more-specific IPv6 return routes on eth3. Unlike the existing\
+  \ link/flap rules, this runs for link/loss and does not require a correlated linkDown\
+  \ trap, which was absent during this incident."
+trigger: Runs for link/loss, at the end of the checks.
+match:
+  tags:
+  - link/loss
+mode: active
+position: end
+tags:
+- link/loss
+source:
+  by: ai
+  incident: 20261112T071008Z-r4-link_eth3
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-12T00:19:51'
+steps:
+- id: s1
+  ask: Is this loss alarm on the r4 border router?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: show running-config
+      text: hostname r4
+  then:
+    absent: "stop This diagnostic is specific to the r4\u2013s4 link."
+    error: escalate Cannot identify the alarm device.
+    unsupported: stop This diagnostic requires the r4 running configuration.
+- id: s2
+  ask: Is r4 eth3 the s4-facing link?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: show running-config
+      text: "interface eth3\n description To-S4-Core"
+  then:
+    absent: "stop The expected r4\u2013s4 interface layout is not present."
+    error: escalate Cannot read the r4 interface layout.
+    unsupported: stop Cannot inspect the r4 interface layout.
+- id: s3
+  ask: Is the far-end port physically down rather than administratively shut?
+  check:
+    name: output_has
+    args:
+      device: s4
+      command: show interfaces Ethernet1
+      text: Ethernet1 is down, line protocol is down (notconnect)
+  then:
+    absent: stop No current far-end carrier-down evidence; this diagnostic does not
+      identify the cause.
+    error: escalate Cannot inspect s4 Ethernet1.
+    unsupported: stop Cannot inspect the far-end carrier state.
+- id: s4
+  ask: Does a more-specific IPv6 return route remain pinned to r4 eth3?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: ip -6 route
+      text: 2001:db8:20::/64 via 2001:db8:100:44::1 dev eth3
+  then:
+    absent: stop The expected pinned more-specific IPv6 return route is absent.
+    error: escalate Cannot inspect r4 kernel IPv6 routes.
+    unsupported: stop Cannot inspect kernel return routes.
+- id: s5
+  ask: Will s4's configured IPv4 default reselect the same failed link when carrier
+    returns?
+  check:
+    name: output_has
+    args:
+      device: s4
+      command: show running-config
+      text: ip route 0.0.0.0/0 10.0.44.0
+  then:
+    found: cause routing.static_paths_over_lossy_link device=r4
+    absent: stop The expected pinned s4 IPv4 default is absent.
+    error: escalate Cannot inspect s4's configured default.
+    unsupported: stop Cannot inspect s4 static defaults.
+causes:
+  routing.static_paths_over_lossy_link: "Confirmed r4\u2013s4 link loss has carrier-down\
+    \ evidence and static outbound/return routes still pinned to that link, so raising\
+    \ OSPF costs alone cannot protect traffic."
+end: stop This rule's checks found nothing, so the others carry on.

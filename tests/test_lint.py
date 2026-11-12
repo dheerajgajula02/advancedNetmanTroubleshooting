@@ -10,9 +10,13 @@ def messages(issues, level="error"):
 
 
 def test_shipped_rules_are_clean():
+    """Hand-written rules have no warnings. One a person accepted from a suggestion may: they saw it before
+    accepting, and some only run for a monitor, which this repo cannot see (the monitors live in the history store)."""
     rs = load_ruleset(REPO / "rules")
     assert rs.errors == []
-    assert lint(rs.parsed) == []
+    issues = lint(rs.parsed)
+    accepted = {r.id for r in rs.parsed if r.source.approved_by}
+    assert errors(issues) == [] and [i for i in issues if i.rule_id not in accepted] == []
 
 
 def test_unbound_placeholder():

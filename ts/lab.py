@@ -103,18 +103,29 @@ def show_json(device: str, eos_command: str | None, frr_command: str | None, kee
     return ev, data
 
 
-def change_running(path: Path = CHANGE_LOCK, locks: Path = Path("/proc/locks")) -> bool:
-    """Whether a job holds the network change lock. Reads /proc/locks, so it never takes the lock itself."""
+def lock_holders(path: Path = CHANGE_LOCK, locks: Path = Path("/proc/locks")) -> set[int]:
+    """The processes holding (or queued for) the network change lock. Reads /proc/locks, so it never takes the lock itself."""
     try:
         inode = path.stat().st_ino
         table = locks.read_text()
     except OSError:
-        return False
+        return set()
+    held = set()
     for line in table.splitlines():
         parts = line.replace("->", "").split()
         if len(parts) >= 6 and parts[1] == "FLOCK" and parts[5].endswith(f":{inode}"):
-            return True
-    return False
+            held.add(int(parts[4]) if parts[4].isdigit() else -1)
+    return held
+
+
+def change_running(path: Path = CHANGE_LOCK, locks: Path = Path("/proc/locks")) -> bool:
+    """Whether a job holds the network change lock."""
+    return bool(lock_holders(path, locks))
+
+
+def own_change_running() -> bool:
+    """Whether this process (an AI stop-gap or a repair) holds the lock, rather than a deploy or a test job."""
+    return os.getpid() in lock_holders()
 
 
 def console_probe(device: str) -> tuple[str, str, int]:

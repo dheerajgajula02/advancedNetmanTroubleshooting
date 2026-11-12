@@ -1,0 +1,89 @@
+id: slow-internet-netem-transit-loss
+title: 'Host reports slow internet (works but crawls): check the transit border''s
+  tc qdisc for a netem loss shaper'
+table: diagnose
+priority: 100
+description: 'For a "slow network / video freezes but not down" complaint where the
+  host still reaches 8.8.8.8, look at the transit border router carrying the host''s
+  VLAN: `tc qdisc show` on r3. A root netem qdisc with a loss percentage silently
+  drops a fixed share of packets, which looks like half-loading pages and freezing
+  calls while the link stays up. Confirm with a 50-ping link_loss across r3 eth3,
+  prove it is one link (other_links_clean) and software rather than hardware (interface_errors),
+  then delete the qdisc.'
+trigger: Runs for service/internet, link/loss, at the end of the checks.
+match:
+  tags:
+  - service/internet
+  - link/loss
+mode: active
+position: end
+tags:
+- service/internet
+- link/loss
+source:
+  by: ai
+  incident: 20261109T045747Z-h2-ticket
+  note: deepseek-v4.1-flash
+  approved_by: operator
+  approved_at: '2026-11-12T00:19:45'
+steps:
+- id: s1
+  ask: Does the host still reach the internet at all?
+  check:
+    name: ping
+    args:
+      device: '{device}'
+      target: 8.8.8.8
+  then:
+    unreachable: stop the host has no internet at all, so this is the hard-outage
+      case (internet-unreachable), not degraded service.
+- id: s2
+  ask: Does the transit border router r3 have a netem shaper installed?
+  check:
+    name: output_has
+    args:
+      command: tc qdisc show
+      device: r3
+      text: netem
+  then:
+    absent: stop no netem qdisc on r3, so injected loss is not the explanation; look
+      at the host, its access port and the upstream path.
+- id: s3
+  ask: Is the r3 eth3 link that carries the VLAN actually losing packets right now?
+  check:
+    name: link_loss
+    args:
+      device: r3
+      interface: eth3
+      target: 10.0.33.1
+  then:
+    clean: stop the qdisc is present but this link is not losing packets now; recheck
+      the host end before changing anything.
+- id: s4
+  ask: Is the loss limited to this one link rather than the whole router?
+  check:
+    name: other_links_clean
+    args:
+      device: r3
+      interface: eth3
+  then:
+    lossy: stop r3's other links are lossy too, so this is a sick router, not a single
+      injected qdisc.
+- id: s5
+  ask: Are the error counters clean, i.e. is the loss software rather than failing
+    optics or cable?
+  check:
+    name: interface_errors
+    args:
+      device: r3
+      interface: eth3
+      target: 10.0.33.1
+  then:
+    clean: cause link.netem_loss_on_transit device=r3
+    errors: stop eth3's error counters climb, so treat it as bad optics/cable (bad-link)
+      instead of injected loss.
+causes:
+  link.netem_loss_on_transit: A leftover netem qdisc on r3 eth3 drops a fixed percentage
+    of every packet crossing the link h2's VLAN uses, so h2 keeps working but pages
+    half-load and real-time traffic such as video calls freezes.
+end: stop This rule's checks found nothing, so the others carry on.

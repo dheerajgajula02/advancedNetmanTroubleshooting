@@ -1,5 +1,7 @@
 """Monitors: building variables, replaying the past, the watcher's firing rules, and the AI's guard rails."""
 
+import time
+
 import pytest
 
 from ts import history, monitor_ai, monitors, review
@@ -98,7 +100,7 @@ def test_backtest_says_whether_the_incident_was_caught(monkeypatch):
 def _watch(monkeypatch, outcomes, tests=()):
     """A watcher whose monitor reads the given sequence of holds."""
     seen = iter(outcomes)
-    monkeypatch.setattr(monitors, "evaluate", lambda sp, at=None: (lambda h: {"values": {"flaps": 3.0 if h else 0.0, "downs": 1.0 if h else 0.0}, "conditions": [h, h], "holds": h, "missing": []})(next(seen)))
+    monkeypatch.setattr(monitors, "evaluate", lambda sp, at=None, since=None: (lambda h: {"values": {"flaps": 3.0 if h else 0.0, "downs": 1.0 if h else 0.0}, "conditions": [h, h], "holds": h, "missing": []})(next(seen)))
     fired = []
     w = monitors.Watch(fired.append, log=lambda m: None)
     jobs = list(tests)  # what each look at the test jobs finds, in order: a job name, or None for nothing running
@@ -135,6 +137,69 @@ def test_a_monitor_never_fires_for_what_a_test_job_caused(monkeypatch):
     assert [e["time"] for e in fired] == [20_120]  # held back while it lasted, fires on the next episode
     kinds = [e["kind"] for e in monitors.events("s1-eth4-flapping")]
     assert "held_back" in kinds
+
+
+def test_a_new_monitor_counts_only_what_happened_after_it_was_accepted(monkeypatch):
+    """It was written from trouble that has been looked at already; firing on that again is a wasted run."""
+    accepted = monitors.add(spec(), "", "test")["created"]
+    asked = []
+
+    class Day:
+        def count_documents(self, query):
+            asked.append(query["timestamp"]["$gt"])
+            return 7
+
+    class Lake:
+        def list_collection_names(self):
+            return [time.strftime("%Y_%m_%d", time.gmtime(accepted + d)) for d in (-86400, 0, 86400)]
+
+        def __getitem__(self, day):
+            return Day()
+
+    monkeypatch.setattr(monitors, "_lake", lambda: Lake())
+    queries = []
+    monkeypatch.setattr(monitors, "prom_query", lambda expr, at=None: queries.append(expr) or [{"value": [0, "5"]}])
+    w = monitors.Watch(lambda e: None, log=lambda m: None)
+    monkeypatch.setattr(w, "tests_now", lambda now: [])
+    w.step(accepted + 90)
+    assert asked and min(asked) == accepted  # not 10 minutes back, which would reach before it was accepted
+    assert queries[-1].endswith("[90s]))")
+    w.step(accepted + 3600)  # once a whole window has passed, the window is the one it was given
+    assert min(asked[-1:]) == accepted + 3600 - 600 and queries[-1].endswith("[10m]))")
+
+
+def test_its_own_change_makes_a_monitor_wait_not_give_up_the_episode(monkeypatch):
+    """An AI stop-gap holds the change lock too. The trouble began without it, so the monitor fires once the change is done."""
+    monitors.add(spec(), "", "test")
+    w, fired = _watch(monkeypatch, [True, True, True])
+    own = [True, False]
+    monkeypatch.setattr(w, "own_change", lambda: own.pop(0) if own else False)
+    w.step(30_000)
+    assert fired == [] and monitors.get("s1-eth4-flapping")["state"] == "holding"
+    w.step(30_030)
+    assert [e["time"] for e in fired] == [30_030]
+    assert "held_back" not in [e["kind"] for e in monitors.events("s1-eth4-flapping")]
+
+
+def test_only_another_process_holding_the_lock_counts_as_a_job(tmp_path, monkeypatch):
+    import os
+
+    from ts import lab
+    lock = tmp_path / "change.lock"
+    lock.write_text("")
+    inode = lock.stat().st_ino
+    table = tmp_path / "locks"
+    table.write_text(f"1: FLOCK  ADVISORY  WRITE {os.getpid()} 00:2e:{inode} 0 EOF\n2: POSIX  ADVISORY  WRITE 77 00:2e:{inode} 0 EOF\n")
+    assert lab.lock_holders(lock, table) == {os.getpid()} and lab.change_running(lock, table)
+    table.write_text(f"1: FLOCK  ADVISORY  WRITE 4242 00:2e:{inode} 0 EOF\n")
+    assert lab.lock_holders(lock, table) == {4242}
+    monkeypatch.setattr(lab, "lock_holders", lambda *a: {os.getpid()})
+    from ts.sources import jenkins
+    monkeypatch.setattr(jenkins, "running_change_jobs", lambda: [])
+    w = monitors.Watch(lambda e: None, log=lambda m: None)
+    assert w.tests_now(1.0) == [] and w.own_change()
+    monkeypatch.setattr(lab, "lock_holders", lambda *a: {4242})
+    assert w.tests_now(2.0) == ["a job holding the network change lock"] and not w.own_change()
 
 
 def test_a_paused_monitor_is_not_looked_at(monkeypatch):

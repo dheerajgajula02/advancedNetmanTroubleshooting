@@ -140,10 +140,11 @@ def _walk(monkeypatch, rule, stop_at=None, outcome=None):
 
     for step in rule.steps:
         monkeypatch.setitem(CHECKS, step.check.name, dataclasses.replace(step.check.block, func=answer))
-    wanted = rule.match.get("event") or sorted(tags.events_for(rule.match["tags"]))  # a rule the AI wrote says which tags it runs for
+    wanted = rule.match.get("event") or sorted(tags.events_for(rule.match["tags"])) or ["monitor.fired"]  # a rule the AI wrote says which tags it runs for; only a monitor carries some
     kind = wanted if isinstance(wanted, str) else wanted[0]
+    carried = {"tags": list(rule.match["tags"])} if kind == "monitor.fired" else {}
     return engine.run(rule, {"event": kind, "device": "s1", "role": "access", "platform": "eos", "time": 1.79e9, "subject": "thing",
-                             "trap_time": "2026-11-08 07:00:00", "raw": "", **{f: f"{f}_value" for f in EVENT_TYPES[kind]}})
+                             "trap_time": "2026-11-08 07:00:00", "raw": "", **{f: f"{f}_value" for f in EVENT_TYPES[kind]}, **carried})
 
 
 @pytest.mark.parametrize("rule_id,i,outcome", EXITS)

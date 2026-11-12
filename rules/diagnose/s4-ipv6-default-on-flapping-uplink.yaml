@@ -1,0 +1,57 @@
+id: s4-ipv6-default-on-flapping-uplink
+pipeline: s4-ipv6-default-on-flapping-uplink
+title: s4 IPv6 outbound default reselects its flapping r4 uplink
+table: diagnose
+priority: 100
+description: On a repeated-link-flap alarm, check for carrier loss without a config
+  change and inspect s4's configured IPv6 default, even if a routing-table snapshot
+  currently shows an alternate path during link-down. This covers s4's outbound IPv6
+  pinning, distinct from the installed IPv4-default and r4 IPv6-return rules.
+trigger: Runs for link/flap, at the end of the checks.
+match:
+  tags:
+  - link/flap
+mode: shadow
+position: end
+tags:
+- link/flap
+source:
+  by: ai
+  incident: 20261112T070503Z-s4-monitor_s4-eth1-flap-ospf-drop
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-12T00:19:30'
+steps:
+- id: s1
+  ask: Did s4 Ethernet1 lose carrier without a configuration change during this repeated-flap
+    alarm?
+  check:
+    name: device_log
+    args:
+      device: s4
+      interface: Ethernet1
+  then:
+    config_change: stop A configuration change accompanied the event; investigate
+      it before diagnosing this carrier-loss pattern.
+    nothing: stop No carrier-loss evidence for the s4 uplink in this event.
+    error: escalate Cannot read the s4 uplink log.
+    unsupported: stop The s4 uplink log check is unsupported.
+- id: s2
+  ask: Does s4 still configure its outbound IPv6 default through the repeatedly failing
+    r4 link?
+  check:
+    name: output_has
+    args:
+      device: s4
+      command: show running-config
+      text: 'ipv6 route ::/0 2001:db8:100:44::'
+  then:
+    found: cause routing.static_ipv6_default_on_flapping_link device=s4
+    absent: stop The configured IPv6 default does not select this failing next hop.
+    error: escalate Cannot inspect s4's configured IPv6 default.
+    unsupported: stop The running-config check is unsupported.
+causes:
+  routing.static_ipv6_default_on_flapping_link: s4's configured IPv6 default selects
+    the repeatedly failing r4-facing link again when carrier returns, so a transient
+    alternate route or OSPF cost change alone does not protect outbound IPv6 traffic.
+end: stop This rule's checks found nothing, so the others carry on.

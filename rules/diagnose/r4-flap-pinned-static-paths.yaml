@@ -1,0 +1,72 @@
+id: r4-flap-pinned-static-paths
+pipeline: r4-flap-pinned-static-paths
+title: 'r4 repeated-flap alarm: find pinned static paths without a single linkDown
+  trap'
+table: diagnose
+priority: 100
+description: 'For an already raised link/flap alarm on the r4-to-s4 border link, recognize
+  that s4''s static IPv4 default and r4''s static IPv6 return aggregate still select
+  that link. Do not require a linkDown inside a narrow trap window: the recurrent-flap
+  monitor already supplies repeated operational and adjacency changes. This diagnoses
+  route pinning, not the exact failing physical component.'
+trigger: Runs for link/flap, at the end of the checks.
+match:
+  tags:
+  - link/flap
+mode: active
+position: end
+tags:
+- link/flap
+source:
+  by: ai
+  incident: 20261112T065033Z-r4-monitor_r4-eth3-adjacency-flapping
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-12T00:19:37'
+steps:
+- id: s1
+  ask: Is this the border interface configuration that connects to s4?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: show running-config
+      text: description To-S4-Core
+  then:
+    absent: stop This is not the r4-to-s4 border-link configuration.
+- id: s2
+  ask: Does eth3 have a mapped peer?
+  check:
+    name: topology_peer
+    args:
+      device: '{device}'
+      interface: eth3
+  then:
+    none: stop No mapped peer for eth3; investigate the actual link before diagnosing
+      pinned routes.
+- id: s3
+  ask: Is s4's static IPv4 default still pinned to the repeatedly flapping r4 link?
+  check:
+    name: output_has
+    args:
+      device: s4
+      command: show running-config
+      text: ip route 0.0.0.0/0 10.0.44.0
+  then:
+    absent: stop The specific s4 static default is not present; inspect the current
+      forwarding path.
+- id: s4
+  ask: Does r4's IPv6 aggregate return route still use the same unstable link?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: show running-config
+      text: ipv6 route 2001:db8::/48 2001:db8:100:44::1
+  then:
+    found: cause routing.static_paths_on_flapping_link device=r4
+causes:
+  routing.static_paths_on_flapping_link: "On a repeated-flap alarm, s4's IPv4 default\
+    \ and r4's IPv6 return aggregate remain pinned to the unstable r4 eth3\u2013s4\
+    \ Ethernet1 link, so OSPF cost changes alone cannot protect these paths."
+end: stop This rule's checks found nothing, so the others carry on.

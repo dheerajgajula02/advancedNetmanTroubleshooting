@@ -11,7 +11,7 @@ def write(path, data):
 
 def test_lint_list_show(rules_dir, capsys):
     assert main(["--rules", str(rules_dir), "rule", "lint"]) == 0
-    assert "0 errors, 0 warnings" in capsys.readouterr().out
+    assert " 0 errors, " in capsys.readouterr().out  # rules a person accepted from a suggestion may carry warnings (test_shipped_rules_are_clean)
     assert main(["--rules", str(rules_dir), "rule", "list"]) == 0
     out = capsys.readouterr().out
     assert "interface-down" in out

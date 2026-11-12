@@ -185,11 +185,11 @@ def event_times(v: dict, start: float, end: float, limit: int = 50000) -> tuple[
     return sorted(stamps), covered
 
 
-def event_count(v: dict, at: float) -> int:
-    window = seconds(v["window"])
+def event_count(v: dict, at: float, since: float | None = None) -> int:
+    start = max(at - seconds(v["window"]), since or 0.0)
     db = _lake()
     have = set(db.list_collection_names())
-    return sum(db[day].count_documents(_event_filter(v, at - window, at)) for day in _days(at - window, at) if day in have)
+    return sum(db[day].count_documents(_event_filter(v, start, at)) for day in _days(start, at) if day in have)
 
 
 # --- variables ----------------------------------------------------------------
@@ -264,16 +264,24 @@ def _selector(v: dict) -> str:
     return f'{v["metric"]}{{{",".join(parts)}}}'
 
 
-def promql(v: dict) -> str:
-    """The query for a metric variable. Built here, never written by a model."""
-    sel, f = _selector(v), v["function"]
+def promql(v: dict, window: str | None = None) -> str:
+    """The query for a metric variable. Built here, never written by a model. window: a shorter one to use instead."""
+    sel, f, window = _selector(v), v["function"], window or v.get("window")
     if f == "now":
         inner = sel
     elif f in ("increase", "rate", "changes", "delta"):
-        inner = f"{f}({sel}[{v['window']}])"
+        inner = f"{f}({sel}[{window}])"
     else:
-        inner = f"{f.removesuffix('_over')}_over_time({sel}[{v['window']}])"
+        inner = f"{f.removesuffix('_over')}_over_time({sel}[{window}])"
     return f"{v.get('combine', 'max')}({inner})"
+
+
+def _cut(v: dict, at: float, since: float | None) -> str | None:
+    """The variable's window, cut short so it begins no earlier than `since`. None when it already does."""
+    if not since or not v.get("window"):
+        return None
+    left = int(at - since)
+    return None if left >= seconds(v["window"]) else f"{max(left, 1)}s"
 
 
 def check_exists(v: dict) -> None:
@@ -312,11 +320,15 @@ def _number(rows: list[dict]) -> float | None:
     return None if math.isnan(value) or math.isinf(value) else value
 
 
-def read(v: dict, at: float | None = None) -> float | None:
-    """The variable's value now (or at a moment). None when nothing was reported."""
+def read(v: dict, at: float | None = None, since: float | None = None) -> float | None:
+    """The variable's value now (or at a moment). None when nothing was reported.
+
+    since: nothing from before this moment counts. The watcher passes when the monitor was accepted,
+    so a new monitor does not fire on the trouble it was written from, which has been looked at already.
+    """
     if v["source"] == "events":
-        return float(event_count(v, at or time.time()))
-    return _number(prom_query(promql(v), at))
+        return float(event_count(v, at or time.time(), since))
+    return _number(prom_query(promql(v, _cut(v, at or time.time(), since)), at))
 
 
 def history_of(v: dict, start: float, end: float, step: int = STEP) -> tuple[list[float], list[float | None]]:
@@ -464,8 +476,8 @@ def _holds(spec: dict, values: dict) -> tuple[list[bool | None], bool]:
     return results, (all(r is True for r in results) if spec["match"] == "all" else any(r is True for r in results))
 
 
-def evaluate(spec: dict, at: float | None = None) -> dict:
-    values = {v["name"]: read(v, at) for v in spec["variables"]}
+def evaluate(spec: dict, at: float | None = None, since: float | None = None) -> dict:
+    values = {v["name"]: read(v, at, since) for v in spec["variables"]}
     results, holds = _holds(spec, values)
     return {"values": values, "conditions": results, "holds": holds, "missing": [n for n, x in values.items() if x is None]}
 
@@ -647,7 +659,7 @@ class Watch:
         from ts import lab
         from ts.sources import jenkins
         jobs = list(jenkins.running_change_jobs())
-        if lab.change_running():
+        if lab.lock_holders() - {os.getpid()}:  # this process holding it is its own repair or AI stop-gap, not a job (see own_change)
             jobs.append("a job holding the network change lock")
         if jobs:
             self.test_seen, self.test_jobs = now, jobs
@@ -655,6 +667,12 @@ class Watch:
         if now - self.test_seen < HELD_BACK_GRACE:
             return [f"{job}, finished less than {HELD_BACK_GRACE // 60} minutes ago" for job in self.test_jobs]
         return []
+
+    def own_change(self) -> bool:
+        """The troubleshooter is changing the network itself. A monitor waits for that to finish, then looks again;
+        the trouble it watches began without it, so the episode is not put down to a test."""
+        from ts import lab
+        return lab.own_change_running()
 
     def _memory(self, row: dict) -> dict:
         if row["id"] not in self.mem:  # carry on where the last watcher left off, so a restart does not fire again
@@ -671,7 +689,7 @@ class Watch:
             spec, mem = row["spec"], self._memory(row)
             before, fired_at = mem["state"], None
             try:
-                result = evaluate(spec, now)
+                result = evaluate(spec, now, since=row.get("created"))  # only what happened since it was accepted
             except Exception as exc:  # Prometheus or the data lake away: say so, never fire
                 mem["state"] = "error"
                 result = {"values": {}, "conditions": [], "holds": False, "missing": [], "error": f"{type(exc).__name__}: {exc}"[:300]}
@@ -688,7 +706,7 @@ class Watch:
                         note(spec["id"], "held_back", f"Conditions held while {', '.join(jobs[:3])} was running, so no run was started.", result, path=self.path)
                         self.log(f"monitor {spec['id']}: held back, {jobs[0]} is running")
                     cooled = mem["last_fired"] is None or now - mem["last_fired"] >= spec["cooldown_minutes"] * 60
-                    if not mem["fired"] and not mem["held_back"] and now - mem["since"] >= spec["hold_seconds"] and cooled:
+                    if not mem["fired"] and not mem["held_back"] and now - mem["since"] >= spec["hold_seconds"] and cooled and not self.own_change():
                         event = fired_event(spec, result, now, row.get("why") or "")
                         from ts import engine
                         run_id = engine.incident_id(event)

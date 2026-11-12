@@ -1,0 +1,56 @@
+id: s4-static-default-on-flapping-link
+pipeline: s4-static-default-on-flapping-link
+title: s4 static IPv4 default selects its repeatedly flapping r4 link
+table: diagnose
+priority: 100
+description: For a link/flap incident, correlate Ethernet1 with a linkDown and check
+  whether s4 still has its static IPv4 default via 10.0.44.0. This catches the default-route
+  dependency missed by OSPF-only diagnosis and is distinct from the existing IPv6
+  static-return rule; a port being up between flaps does not clear it.
+trigger: Runs for link/flap, at the end of the checks.
+match:
+  tags:
+  - link/flap
+mode: shadow
+position: end
+tags:
+- link/flap
+source:
+  by: ai
+  incident: 20261112T060211Z-s4-monitor_s4-eth1-flap-ospf-drop
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-11T23:50:26'
+steps:
+- id: s1
+  ask: Did Ethernet1 send a linkDown around this repeated-flap alarm?
+  check:
+    name: link_went_down
+    args:
+      device: '{device}'
+      interface: Ethernet1
+  then:
+    stayed_up: stop No correlated Ethernet1 linkDown; this rule does not identify
+      the cause.
+    error: escalate Could not correlate the flap alarm with an Ethernet1 linkDown.
+    unsupported: stop Ethernet1 linkDown correlation is unsupported on this device.
+- id: s2
+  ask: Does the running configuration pin the IPv4 default to s4's r4-facing next
+    hop?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: show running-config
+      text: ip route 0.0.0.0/0 10.0.44.0
+  then:
+    found: cause routing.static_default_on_flapping_link
+    absent: stop The affected device has no matching IPv4 static default through the
+      flapping r4 link.
+    error: escalate Could not read the static default configuration.
+    unsupported: stop Static-default inspection is unsupported on this device.
+causes:
+  routing.static_default_on_flapping_link: The repeated Ethernet1 carrier-loss alarm
+    affects a link selected by the IPv4 static default via 10.0.44.0, so OSPF reconvergence
+    or cost changes alone cannot keep default traffic off it.
+end: stop This rule's checks found nothing, so the others carry on.
