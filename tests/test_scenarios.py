@@ -157,8 +157,14 @@ def test_every_exit_reads_properly(monkeypatch, rule_id, i, outcome):
 
 @pytest.mark.parametrize("rule", RULES, ids=lambda r: r.id)
 def test_every_rule_reaches_its_end(monkeypatch, rule):
-    rec = _walk(monkeypatch, rule)
-    assert rec["result"]["step"] == "end" and len(rec["steps"]) == len(rule.steps)
+    # A step that ends the rule on every answer it can give (the last one, usually) decides; nothing after it runs.
+    decides = next((i for i, s in enumerate(rule.steps) if all(o in s.then and s.then[o].kind != "next" for o in s.check.block.outcomes)), None)
+    if decides is not None:
+        rec = _walk(monkeypatch, rule, decides, rule.steps[decides].check.block.outcomes[0])
+        assert rec["result"]["step"] == decides + 1 and len(rec["steps"]) == decides + 1
+    else:
+        rec = _walk(monkeypatch, rule)
+        assert rec["result"]["step"] == "end" and len(rec["steps"]) == len(rule.steps)
     assert "{" not in rec["result"]["text"]
 
 

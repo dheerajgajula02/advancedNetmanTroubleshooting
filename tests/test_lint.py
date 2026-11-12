@@ -103,6 +103,13 @@ def test_fix_rules():
     assert any("Jenkins" in m for m in messages(lint(rules(diag(), no_window)), "warning"))
 
 
+def test_a_rule_only_a_monitor_runs_is_not_called_dead():
+    only_monitors = diag("flap-rule", match={"tags": ["link/flap"]}, position="end")
+    assert any("can never run" in m for m in messages(lint(rules(only_monitors)), "warning"))
+    assert not any("can never run" in m for m in messages(lint(rules(only_monitors), ["link/flap", "routing/ospf"]), "warning"))
+    assert any("can never run" in m for m in messages(lint(rules(only_monitors), ["routing/ospf"]), "warning"))
+
+
 def test_fix_placeholders_come_from_the_cause():
     producer = diag(steps=[{"check": "interface_status {device} {interface}",
                             "then": {"admin_down": "cause config.drift"}}])  # sets no {section}

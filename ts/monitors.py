@@ -566,6 +566,14 @@ def add(spec: dict, why: str = "", by: str = "operator", proposal: int | None = 
     return get(spec["id"], path)
 
 
+def carried_tags(path: Path | None = None) -> set[str]:
+    """The tags the active monitors put on the events they raise, so the rules written for them run."""
+    try:
+        return {t for m in listing("active", path) for t in m["spec"].get("tags") or []}
+    except Exception:  # the rules still lint without the monitor store, only more warily
+        return set()
+
+
 def get(monitor: str, path: Path | None = None) -> dict | None:
     with _db(path) as db:
         row = db.execute("SELECT * FROM monitors WHERE id = ?", (monitor,)).fetchone()

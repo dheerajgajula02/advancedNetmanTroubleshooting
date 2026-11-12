@@ -1,0 +1,80 @@
+id: ipv4-static-default-on-failed-s4-link
+pipeline: ipv4-static-default-on-failed-s4-link
+title: "Loading-dock IPv4 internet is pinned to the failed s4\u2013r4 link"
+table: diagnose
+priority: 100
+description: 'For loading-dock internet reports, confirm the host uses the annex IPv4
+  gateway, r2 forwards internet traffic toward s4, s4 logs carrier loss on Ethernet1,
+  and s4''s static IPv4 default pins internet traffic to that interface. This is distinct
+  from the existing IPv6 static-return rule: h7 has no IPv6 default route. Escalate
+  for link repair or an approved temporary diversion; this incident''s diversion was
+  rolled back by the safety gate as new s4 drift.'
+trigger: Runs for service/internet, at the end of the checks.
+match:
+  tags:
+  - service/internet
+mode: shadow
+position: end
+tags:
+- service/internet
+source:
+  by: ai
+  incident: 20261112T060028Z-h7-ticket
+  note: gpt-6.1-sol
+  approved_by: operator
+  approved_at: '2026-11-11T23:08:45'
+steps:
+- id: s1
+  ask: Does the reporting computer use the loading-dock annex gateway?
+  check:
+    name: output_has
+    args:
+      device: '{device}'
+      command: ip route
+      text: default via 10.10.10.225 dev eth1
+  then:
+    absent: stop This computer does not use the loading-dock gateway.
+    error: escalate Unable to inspect the reporting computer's gateway.
+    unsupported: stop This computer's routing table cannot be checked by this rule.
+- id: s2
+  ask: Does the distribution router send internet traffic toward s4?
+  check:
+    name: output_has
+    args:
+      device: r2
+      command: show ip route
+      text: via 10.0.42.0, Ethernet1
+  then:
+    absent: stop The recorded distribution path is not present.
+    error: escalate Unable to inspect the distribution path.
+- id: s3
+  ask: Did the core switch record carrier loss on its link to r4 without a configuration
+    change?
+  check:
+    name: device_log
+    args:
+      device: s4
+      interface: Ethernet1
+  then:
+    config_change: escalate Investigate the configuration change associated with the
+      link event.
+    nothing: stop No carrier-loss evidence was found on this link.
+    error: escalate Unable to read link-event evidence.
+    unsupported: stop Link-event evidence is unavailable.
+- id: s4
+  ask: Is a static IPv4 default still configured through the unstable border link?
+  check:
+    name: output_has
+    args:
+      device: s4
+      command: show running-config
+      text: ip route 0.0.0.0/0 10.0.44.0
+  then:
+    found: cause routing.static_default_on_failed_link device=s4
+    absent: stop No static IPv4 default pins traffic to this link.
+    error: escalate Unable to inspect the static default.
+causes:
+  routing.static_default_on_failed_link: "The loading-dock IPv4 internet path uses\
+    \ a static default over the carrier-losing s4\u2013r4 link, so OSPF fallback alone\
+    \ cannot keep traffic off it."
+end: stop This rule's checks found nothing, so the others carry on.

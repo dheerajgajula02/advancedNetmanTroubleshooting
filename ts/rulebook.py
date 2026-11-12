@@ -26,8 +26,10 @@ def check(root: Path, raws: list[dict]) -> tuple[list, list[Issue]]:
     rs = load_ruleset(root)
     parsed = [parse_rule(copy.deepcopy(raw), raw.get("id", "<rule>")) for raw in raws]
     replacing = {rule.id for rule in parsed}
-    before = set(lint(rs.parsed))
-    after = lint([r.rule for r in rs.rules if r.id not in replacing] + parsed)
+    from ts import monitors
+    carried = monitors.carried_tags()
+    before = set(lint(rs.parsed, carried))
+    after = lint([r.rule for r in rs.rules if r.id not in replacing] + parsed, carried)
     return parsed, [issue for issue in after if issue not in before]
 
 

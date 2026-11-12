@@ -128,6 +128,7 @@ class _Goto:
 @dataclass
 class _Linter:
     rules: list
+    carried: frozenset = frozenset()  # tags the monitors put on the events they raise
     issues: list[Issue] = field(default_factory=list)
     producers: list[_Producer] = field(default_factory=list)
     gotos: list[_Goto] = field(default_factory=list)
@@ -160,8 +161,9 @@ class _Linter:
                 for p in pats:
                     if not tag_book.is_known(p):
                         self.error(rule, f"match.tags: {p!r} is not a tag")
-                if not tag_book.events_for([p for p in pats if tag_book.is_known(p)]):
-                    self.warn(rule, "no event carries these tags, so the rule can never run")
+                known = [p for p in pats if tag_book.is_known(p)]
+                if not tag_book.events_for(known) and not tag_book.covers(known, self.carried):
+                    self.warn(rule, "no event or monitor carries these tags, so the rule can never run")
             if key == "cause":
                 for p in pats:
                     if not CAUSE_PATTERN.match(p):
@@ -415,8 +417,9 @@ def _cycles(graph: dict[str, set[str]]) -> list[list[str]]:
     return cycles
 
 
-def lint(rules: list) -> list[Issue]:
-    return _Linter(list(rules)).run()
+def lint(rules: list, carried: Iterable[str] = ()) -> list[Issue]:
+    """carried: the tags the monitors put on their events (monitors.carried_tags), so a rule only a monitor runs is not called dead."""
+    return _Linter(list(rules), frozenset(carried)).run()
 
 
 def errors(issues: Iterable[Issue]) -> list[Issue]:

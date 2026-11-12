@@ -121,8 +121,9 @@ def rule_view(rule, rules, issues: list[Issue]) -> dict:
 
 
 def state(ruleset: RuleSet) -> dict:
+    from ts import monitors
     rules = sorted(ruleset.parsed, key=sort_key)
-    issues = lint(rules)
+    issues = lint(rules, monitors.carried_tags())
     return {
         "root": str(ruleset.root),
         "load_errors": ruleset.errors,

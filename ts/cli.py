@@ -57,8 +57,9 @@ def cmd_blocks(args) -> int:
 # --- rules ----------------------------------------------------------------
 
 def cmd_lint(args) -> int:
+    from ts import monitors
     rs = load_ruleset(args.rules)
-    issues = lint(rs.parsed)
+    issues = lint(rs.parsed, monitors.carried_tags())
     for err in rs.errors:
         print(err)
     _print_issues(issues)
