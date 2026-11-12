@@ -80,13 +80,19 @@ def test_nothing_is_told_past_a_part_still_going():
 def test_jenkins_is_told_each_stage_with_the_name_of_the_next(monkeypatch):
     sent = []
 
+    asked = []
+
     def request(method, path, data=None, content_type="", want="json", timeout=20):
+        asked.append(path)
+        if len(asked) % 2:
+            return None  # Jenkins answers 404 until the build reaches the input, and that comes back as None
         form = dict(urllib.parse.parse_qsl(data.decode()))
         sent.append((path.rsplit("/input/", 1)[1], {p["name"]: p["value"] for p in json.loads(form["json"])["parameter"]}))
         return ""
 
     monkeypatch.setattr(jenkins_api, "_request", request)
     monkeypatch.setattr(stages, "_TOLD", {})
+    monkeypatch.setattr(stages.time, "sleep", lambda s: None)
     parts = [{"label": "A", "state": "done", "text": "a"}, {"label": "B", "state": "failed", "text": "b"}, {"label": "C", "state": "done", "text": "c"}]
     stages._WORK.put(("r1", 7, parts, 0))
     import threading
@@ -98,6 +104,7 @@ def test_jenkins_is_told_each_stage_with_the_name_of_the_next(monkeypatch):
         t.join(0.05)
     assert [s[0] for s in sent] == ["Stage1/submit", "Stage2/submit", "Stage3/submit"]
     assert [s[1]["NEXT"] for s in sent] == ["B", "C", ""] and sent[1][1]["STATE"] == "failed"
+    assert len(asked) == 6  # each stage was asked again until Jenkins took it
 
 
 def test_the_run_pipeline_waits_without_an_executor():

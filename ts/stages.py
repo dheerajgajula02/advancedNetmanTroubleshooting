@@ -241,13 +241,9 @@ def _submit(number: int, stage_no: int, part: dict, nxt: str) -> None:
     body = urllib.parse.urlencode({"json": json.dumps({"parameter": params}), "proceed": "Done"}).encode()
     path = f"{jenkins_api.job_path(pipelines.RUN_PIPELINE)}/{number}/input/Stage{stage_no}/submit"
     for _ in range(INPUT_TRIES):
-        try:
-            jenkins_api._request("POST", path, body, "application/x-www-form-urlencoded", want="text")
+        if jenkins_api._request("POST", path, body, "application/x-www-form-urlencoded", want="text") is not None:
             return
-        except jenkins_api.Unavailable as exc:
-            if "404" not in str(exc):
-                raise
-        time.sleep(0.5)  # the build has not reached this stage's input yet
+        time.sleep(0.5)  # a 404, which comes back as None: the build has not reached this stage's input yet
     raise jenkins_api.Unavailable(f"build #{number} never reached stage {stage_no}")
 
 

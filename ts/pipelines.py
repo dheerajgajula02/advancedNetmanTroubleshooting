@@ -195,7 +195,7 @@ while (next) {{
       currentBuild.description = said.BADGE
     }}
     if (said.STATE == 'failed') {{
-      unstable("${{next}}: this part did not work")
+      unstable("${{next}}: " + said.SAW.split('\\n')[0])
     }}
     next = said.NEXT
   }}
