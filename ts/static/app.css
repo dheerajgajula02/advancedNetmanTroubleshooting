@@ -871,3 +871,11 @@ body.drawer-open main { transition: margin-right .22s; }
 #ts .mevents li { padding: 4px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
 #ts .msess { margin-top: 14px; }
 
+
+/* Ran in Jenkins: one line per rule and repair build of this run */
+#ts .jenk { margin-bottom: 14px; }
+#ts .jenk ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 7px; }
+#ts .jenk .jrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+#ts .jenk .jwhat { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+#ts .jenk .jrow a { color: var(--ink-2); overflow-wrap: anywhere; }
+#ts .jenk .sub { color: var(--ink-2); font-size: 13.5px; margin-top: 2px; }

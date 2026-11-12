@@ -75,14 +75,30 @@ def rule_map(rule: DiagnoseRule, values: dict) -> dict:
             "position": rule.position, "tags": list(rule.tags), "source": rule.source.by}
 
 
-def run(rule: DiagnoseRule, event: dict) -> dict:
-    values = {k: str(v) for k, v in event.items() if isinstance(v, (str, int, float)) and k != "raw"}
-    ctx = Context(event_time=float(event["time"]), event=event)
-    index = {s.id: i for i, s in enumerate(rule.steps) if s.id}
-    records, result = [], None
-    started = time.time()
-    i = 0
-    while i < len(rule.steps):
+def next_token(rule: DiagnoseRule, i: int, chosen: Outcome) -> str:
+    """Where a rule goes after step i (0-based) gives this outcome: "step/N" (1-based), "end" past the
+    last step, or the kind of outcome that ends the rule. The Jenkins pipelines follow the same tokens."""
+    if chosen.kind == "next":
+        return f"step/{i + 2}" if i + 1 < len(rule.steps) else "end"
+    if chosen.kind == "jump":
+        return f"step/{[s.id for s in rule.steps].index(chosen.target) + 1}"
+    return chosen.kind
+
+
+class Runner:
+    """One diagnose rule, a step at a time, so the steps can be driven from here or from a Jenkins build."""
+
+    def __init__(self, rule: DiagnoseRule, event: dict):
+        self.rule, self.event = rule, event
+        self.values = {k: str(v) for k, v in event.items() if isinstance(v, (str, int, float)) and k != "raw"}
+        self.ctx = Context(event_time=float(event["time"]), event=event)
+        self.records: list[dict] = []
+        self.result: dict | None = None
+        self.started = time.time()
+
+    def step(self, i: int) -> tuple[dict, str]:
+        """Run step i (0-based). Returns what was recorded and where the rule goes next (see next_token)."""
+        rule, values = self.rule, self.values
         step = rule.steps[i]
         block = step.check.block
         args = fill_args(step.check.args, values)
@@ -92,14 +108,14 @@ def run(rule: DiagnoseRule, event: dict) -> dict:
             res = Result("error", f"Could not run: {', '.join(missing)} was never found.")
         else:
             try:
-                res = block.func(ctx, **args)
+                res = block.func(self.ctx, **args)
             except Exception as exc:  # a failed check is recorded, not fatal
                 res = Result("error", f"The check failed: {type(exc).__name__}: {exc}")
         if res.outcome not in block.all_outcomes:
             res = Result("error", f"The check returned {res.outcome!r}, which it does not declare.")
         values.update({k: str(v) for k, v in res.values.items()})
         chosen = step.then.get(res.outcome) or Outcome(kind="next")
-        records.append({
+        record = {
             "n": i + 1, "id": step.id, "phase": step.phase,
             "ask": fill(step.ask or block.description, values),
             "check": step.check.render(), "ran_with": args,
@@ -107,24 +123,41 @@ def run(rule: DiagnoseRule, event: dict) -> dict:
             "evidence": [e.as_dict() for e in res.evidence],
             "next": _outcome_view(chosen, rule, values),
             "started": t0, "ms": int((time.time() - t0) * 1000),
+        }
+        self.records.append(record)
+        token = next_token(rule, i, chosen)
+        if not token.startswith("step/") and token != "end":
+            self.result = {**_outcome_view(chosen, rule, values), "step": i + 1}
+        return record, token
+
+    def finish(self) -> dict:
+        """The stored record, once a step has ended the rule or the last one has run."""
+        if self.result is None:
+            self.result = {**_outcome_view(self.rule.end, self.rule, self.values), "step": "end"}
+        return scrub.deep({
+            "id": incident_id(self.event),
+            "event": {k: v for k, v in self.event.items()},
+            "rule": rule_map(self.rule, self.values),
+            "mode": self.rule.mode,
+            "started": self.started, "finished": time.time(),
+            "steps": self.records, "result": self.result, "values": self.values,
         })
-        if chosen.kind == "next":
-            i += 1
-        elif chosen.kind == "jump":
-            i = index[chosen.target]
-        else:
-            result = {**_outcome_view(chosen, rule, values), "step": i + 1}
-            break
-    if result is None:
-        result = {**_outcome_view(rule.end, rule, values), "step": "end"}
-    return scrub.deep({
-        "id": incident_id(event),
-        "event": {k: v for k, v in event.items()},
-        "rule": rule_map(rule, values),
-        "mode": rule.mode,
-        "started": started, "finished": time.time(),
-        "steps": records, "result": result, "values": values,
-    })
+
+
+def run_here(rule: DiagnoseRule, event: dict) -> dict:
+    """Run a rule in this process, every step in order."""
+    runner, token = Runner(rule, event), "step/1"
+    while token.startswith("step/"):
+        _record, token = runner.step(int(token[5:]) - 1)
+    return runner.finish()
+
+
+# Who runs a rule. The watcher points this at Jenkins (ts/jenkins_runs.py), which falls back to run_here.
+RUN_RULE = run_here
+
+
+def run(rule: DiagnoseRule, event: dict) -> dict:
+    return RUN_RULE(rule, event)
 
 
 def _applies(rule, event: dict) -> bool:
@@ -155,7 +188,7 @@ def cleared_at_confirm(record: dict) -> bool:
 
 def _tried(record: dict) -> dict:
     return {"rule": record["rule"]["id"], "title": record["rule"].get("title"), "position": record["rule"].get("position", "main"), "mode": record["mode"],
-            "result": record["result"], "steps": record["steps"]}
+            "result": record["result"], "steps": record["steps"], **({"jenkins": record["jenkins"]} if record.get("jenkins") else {})}
 
 
 def run_chain(chain: list, event: dict) -> dict:

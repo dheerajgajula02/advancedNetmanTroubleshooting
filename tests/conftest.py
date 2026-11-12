@@ -6,6 +6,7 @@ import tempfile  # noqa: E402
 
 _ai = tempfile.mkdtemp(prefix="ts-tests-ai-")
 os.environ["TS_AI_SETTINGS"], os.environ["TS_AI_KEYS"], os.environ["TS_AI_CATALOG"] = f"{_ai}/settings.json", f"{_ai}/keys.json", f"{_ai}/catalog.json"  # nor change which models are in use
+os.environ["TS_JENKINS_INDEX"] = f"{_ai}/jenkins.sqlite"  # nor the AI's index of Jenkins builds
 os.environ["TS_AI_USAGE"] = "off"
 
 import copy

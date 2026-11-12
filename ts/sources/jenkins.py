@@ -12,6 +12,9 @@ from ts.sources import Doc, source
 ROOT = Path(os.environ.get("TS_JENKINS_JOBS", "/var/lib/jenkins/jobs"))
 # Jobs that have nothing to do with this network.
 OTHERS = {"metaGlobalHack", "lab6-sdn-telemetry", "personal_pipelines", "others"}
+# The troubleshooter's own rule pipelines. They are how it looks and repairs, not jobs that change
+# the network on their own, so they never count as tests running or as context for a run.
+OWN = {"troubleshooting-pipelines"}
 # Jobs that change the network or test it by changing it.
 CHANGES_NETWORK = re.compile(r"network-health-monitor|advtests-orchestrator|lab1-vrrp|lab2-traps|lab3-dashboards|deploy|reset|change|rotation|onboard|promote|config", re.I)
 _NOTE = re.compile(r"\x1b\[8mha:.*?\x1b\[0m")
@@ -19,17 +22,18 @@ _FIELD = {k: re.compile(rf"<{k}>([^<]*)</{k}>") for k in ("startTime", "timestam
 SCAN_BACK = 40
 
 
-def _jobs(folder: Path = ROOT, prefix: str = ""):
+def _jobs(folder: Path | None = None, prefix: str = "", own: bool = False):
+    """Every job of this network, folders opened. With own, the troubleshooter's pipelines too."""
     try:
-        entries = sorted(folder.iterdir())
+        entries = sorted((folder or ROOT).iterdir())
     except OSError:
         return
     for entry in entries:
-        if entry.name in OTHERS or not entry.is_dir():
+        if entry.name in OTHERS or (not own and not prefix and entry.name in OWN) or not entry.is_dir():
             continue
         name = f"{prefix}{entry.name}"
         if (entry / "jobs").is_dir():
-            yield from _jobs(entry / "jobs", name + "/")
+            yield from _jobs(entry / "jobs", name + "/", own)
         elif (entry / "nextBuildNumber").is_file():
             yield name, entry
 

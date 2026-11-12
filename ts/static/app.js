@@ -1033,6 +1033,22 @@ async function pageRun(id) {
     } catch (e) { /* the next tick tries again */ }
   }, 4000);
 }
+const BUILD_WORDS = {SUCCESS: ["Passed", "green"], UNSTABLE: ["Unstable", "amber"], FAILURE: ["Failed", "red"], ABORTED: ["Stopped", "amber"]};
+function jenkinsRuns(rec) {
+  const t = triedSplit(rec), rows = [], add = (what, j) => { if (j) rows.push([what, j]); };
+  t.before.forEach(x => add(x.title || x.rule, x.jenkins));
+  add(rec.rule.title || rec.rule.id, rec.jenkins);
+  t.after.forEach(x => add(x.title || x.rule, x.jenkins));
+  if (rec.repair) add(`Repair: ${rec.repair.title || rec.repair.rule}`, rec.repair.jenkins);
+  if (!rows.length) return "";
+  const item = ([what, j]) => {
+    const [w, tone] = j.ran === "here" ? ["Ran here", "amber"] : j.broke ? ["Broke part-way", "amber"] : BUILD_WORDS[j.result] || [j.result ? words(j.result.toLowerCase()) : "Done", ""];
+    const link = j.url ? `<a href="${esc(j.url)}" target="_blank" rel="noreferrer">${esc(j.pipeline)} #${esc(j.number)} &#8599;</a>` : `<a href="${esc(j.pipeline_url)}" target="_blank" rel="noreferrer">${esc(j.pipeline)} &#8599;</a>`;
+    const why = j.ran === "here" ? `Jenkins could not run it, so the troubleshooter did: ${j.why || ""}` : j.broke ? `The build stopped after the change, so it was finished here and anything left half-done was undone: ${j.broke}` : "";
+    return `<li><div class="jrow"><span class="jwhat">${esc(what)}</span>${link}<span class="ans ${tone}">${esc(w)}</span></div>${why ? `<p class="sub">${esc(why)}</p>` : ""}</li>`;
+  };
+  return `<section class="panel jenk"><h2>Ran in Jenkins <small>${esc(jenkinsFolder())}</small></h2><ul>${rows.map(item).join("")}</ul></section>`;
+}
 function showRun(rec) {
   const openWas = S.drawer;
   if (!S.rec || S.rec.id !== rec.id) S.showReads = false;
@@ -1057,7 +1073,8 @@ function showRun(rec) {
       <section class="panel"><h2>What broke</h2><p>${ai && ai.root_cause ? ticks(plainCause(ai.root_cause)) : `<b>${esc(vt)}.</b> ${esc(vx)}`}</p></section>
       <section class="panel"><h2>What was done</h2><ul>${doneLines(rec).map(x => `<li>${x}</li>`).join("")}</ul></section>
     </div>
-    ${a ? `<section class="airead"><h2><span class="ai">AI</span> What it makes of this</h2><p>${esc(a.summary)}</p>${a.why ? `<details class="more"><summary>Why it thinks so</summary><p class="sub">${esc(a.why)}</p></details>` : ""}<p class="sub" style="margin-top:6px"><a href="#/ai-data?q=${esc(rec.id)}">See everything it was given and what it was thinking</a></p></section>` : ""}
+    ${jenkinsRuns(rec)}
+    ${a ?`<section class="airead"><h2><span class="ai">AI</span> What it makes of this</h2><p>${esc(a.summary)}</p>${a.why ? `<details class="more"><summary>Why it thinks so</summary><p class="sub">${esc(a.why)}</p></details>` : ""}<p class="sub" style="margin-top:6px"><a href="#/ai-data?q=${esc(rec.id)}">See everything it was given and what it was thinking</a></p></section>` : ""}
     <div class="replay" role="group" aria-label="Replay controls">
       <h2>Replay</h2>
       <button class="btn go" id="play" type="button"></button>
@@ -1118,7 +1135,7 @@ function callView(c) {
   if (t.startsWith("check_")) return {q: `Check ${words(t.slice(6))}${on}`};
   if (t.startsWith("action_")) return {q: `Run ${words(t.slice(7))}${on}`, change: true};
   return ({retire_earlier_change: {q: "Take out an earlier stop-gap", cmd: a.run || "", change: true}, recall_my_notes: {q: "Look through its own notes", cmd: a.text || ""}, try_config: {q: `Try a config change${on}`, cmd: (a.lines || []).join("; "), change: true}, try_command: {q: `Try a command${on}`, cmd: (a.argv || []).join(" "), change: true},
-    search_memory: {q: "Search the stored records", cmd: a.text || ""}, search_runs: {q: "Search past runs", cmd: a.text || ""}, search_rejected: {q: "Check what people rejected", cmd: a.text || ""},
+    search_memory: {q: "Search the stored records", cmd: a.text || ""}, search_jenkins: {q: "Search Jenkins builds", cmd: [a.text, a.job, a.result].filter(Boolean).join(" · ")}, read_build: {q: `Read Jenkins build ${a.job || ""} #${a.number || ""}`, cmd: a.part > 1 ? `part ${a.part}` : ""}, search_runs: {q: "Search past runs", cmd: a.text || ""}, search_rejected: {q: "Check what people rejected", cmd: a.text || ""},
     list_tags: {q: "Read the tag list"}, list_rules: {q: "Read the installed rules"}, propose_rule: {q: `Suggest a rule: ${a.title || a.id}`, propose: true}, propose_tag: {q: `Suggest a new tag: ${a.area}/${a.name}`, propose: true},
     propose_backdate: {q: `Suggest ${a.tag} for past runs`, propose: true}, finish: {q: `Finish: ${words(a.outcome || "done")}`}})[t] || {q: words(t)};
 }
@@ -1459,6 +1476,13 @@ function fixText(fix) {
 }
 const when = p => `<time>${esc(dfmt(p.created))}, ${esc(hm(p.created))}</time>`;
 const runLink = id => id ? `<a href="#/run/${esc(id)}">Open the run</a>` : "none";
+const jenkinsFolder = () => (S.rules && S.rules.jenkins && S.rules.jenkins.folder) || "troubleshooting-pipelines";
+const pipelineUrl = name => S.rules && S.rules.jenkins ? `${S.rules.jenkins.url}job/${encodeURIComponent(name)}/` : "";
+function proposedPipelines(p) {
+  const names = p.body.rules.map(r => r.pipeline || r.id);
+  if (p.status === "accepted") return p.body.rules.map((r, i) => pipelineUrl(names[i]) && S.installed && S.installed.has(r.id) ? `<a href="${esc(pipelineUrl(names[i]))}" target="_blank" rel="noreferrer">${esc(names[i])} &#8599;</a>` : esc(names[i])).join(", ");
+  return `${names.map(n => `<code>${esc(jenkinsFolder())}/${esc(n)}</code>`).join(" and ")}${p.status === "pending" ? `<span class="muted">, made when you accept</span>` : ""}`;
+}
 function factRow(items) { return `<dl class="factrow">${items.filter(Boolean).map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>`; }
 function runChecks(p) {
   const rows = p.body.runs || [];
@@ -1476,7 +1500,7 @@ function card(p) {
   let inner = "";
   if (p.kind === "rule") {
     const [d, fix] = p.body.rules, tags = (p.body.trigger || {}).tags || d.tags || [], replay = p.proof.replay || {};
-    inner = factRow([["Runs for", `<div class="chips">${tags.map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>`], ["Where", esc(POSITIONS[p.body.position] || p.body.position)], ["Learned from", runLink(p.run_id)], ["Suggested by", esc(p.model || "AI")]]) +
+    inner = factRow([["Runs for", `<div class="chips">${tags.map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>`], ["Where", esc(POSITIONS[p.body.position] || p.body.position)], ["Learned from", runLink(p.run_id)], ["Suggested by", esc(p.model || "AI")], ["Jenkins pipeline", proposedPipelines(p)]]) +
       `<h3>What it checks, in order</h3><ol class="story">${d.steps.map((s, n) => `<li><span class="n">${n + 1}.</span><div>${tpl(s.ask)} <code>${esc(s.check.name === "output_has" ? `${s.check.args.command} on ${s.check.args.device}, looking for "${s.check.args.text}"` : `${s.check.name} ${Object.values(s.check.args).join(" ")}`)}</code>${Object.entries(s.then || {}).map(([k, v]) => `<div class="then">If ${esc(words(k))}: ${thenText(v, d.causes || {})}</div>`).join("")}</div></li>`).join("")}</ol>` +
       (fix ? `<h3>What it would change: ${esc(fix.title)}</h3>${fixText(fix)}<p class="note">Risk ${esc(fix.risk)}. Afterwards it must pass: ${inFix((fix.verify || []).map(v => `${v.check.name} ${Object.values(v.check.args).join(" ")} = ${v.expect.join(" or ")}`).join("; "))}.</p>` : `<h3>What it would change</h3><p class="muted">Nothing. It only names the cause.</p>`) +
       (replay.ok ? `<div class="proof"><span class="led green"></span><div><b>Tested on what the AI saw.</b> Walked ${plural((replay.path || []).length, "step")} and reached ${esc(replay.reached)}.</div></div>` : `<div class="proof none"><span class="led off"></span><div>No replay on record.</div></div>`);
@@ -1601,7 +1625,7 @@ async function setMode(id, to) {
 function ruleBody(id) {
   const r = S.rules.rules.find(x => x.id === id);
   const head = `${top_(`${r.table === "fix" ? "Repairs" : "Finds the cause"}, ${esc(MODE_WORDS[r.mode] || r.mode)}`)}<h2 id="d-title">${esc(r.title || r.id)}</h2><p class="about">${esc(r.description)}</p>
-    <dl class="facts" style="margin-top:9px"><dt>Runs for</dt><dd>${esc(r.tags.join(", ") || r.match_text)}</dd><dt>Trigger</dt><dd>${esc(r.match_text)}</dd><dt>Where</dt><dd>${esc(POSITIONS[r.position] || r.position)}</dd><dt>From</dt><dd>${r.source.by === "ai" ? `The AI, from <a href="#/run/${esc(r.source.incident)}">this run</a>${r.source.approved_by ? `, approved by ${esc(r.source.approved_by)}` : ""}` : "Built in"}</dd></dl>`;
+    <dl class="facts" style="margin-top:9px"><dt>Runs for</dt><dd>${esc(r.tags.join(", ") || r.match_text)}</dd><dt>Trigger</dt><dd>${esc(r.match_text)}</dd><dt>Where</dt><dd>${esc(POSITIONS[r.position] || r.position)}</dd><dt>From</dt><dd>${r.source.by === "ai" ? `The AI, from <a href="#/run/${esc(r.source.incident)}">this run</a>${r.source.approved_by ? `, approved by ${esc(r.source.approved_by)}` : ""}` : "Built in"}</dd>${r.pipeline ? `<dt>Jenkins</dt><dd>${r.pipeline_url ? `<a href="${esc(r.pipeline_url)}" target="_blank" rel="noreferrer">${esc(jenkinsFolder())}/${esc(r.pipeline)} &#8599;</a>` : `${esc(jenkinsFolder())}/${esc(r.pipeline)}, made when it is accepted`}</dd>` : ""}</dl>`;
   if (r.table === "fix") {
     return `${head}<h3>What it does</h3><pre class="cmd">${esc(r.action.do)}</pre>${r.action.undo ? `<h3>How it undoes</h3><pre class="cmd">${esc(r.action.undo)}</pre>` : `<p class="note">Undo: ${esc(r.action.undo_policy)}.</p>`}
       <h3>Must be true first</h3>${r.require.map(c => `<pre class="cmd">${esc(c.text)}</pre>`).join("")}<h3>Must be true after</h3>${r.verify.map(c => `<pre class="cmd">${esc(c.text)}</pre>`).join("")}

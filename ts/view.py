@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ts import jenkins_api
 from ts.lint import Issue, base_vars, cause_overlaps, lint, reachable_devices
 from ts.registry import ACTIONS, CHECKS, Block
 from ts.ruleset import RuleSet
@@ -88,6 +89,10 @@ def rule_view(rule, rules, issues: list[Issue]) -> dict:
         "reachable": sorted(reachable_devices(rule.match)),
         "fields": _example_fields(rule),
     }
+    if isinstance(rule, (DiagnoseRule, FixRule)):
+        d["pipeline"] = getattr(rule, "pipeline", None) or rule.id
+        if rule.mode != "proposed":
+            d["pipeline_url"] = jenkins_api.link(d["pipeline"])
     if isinstance(rule, FilterRule):
         d.update(when=[_condition(c) for c in rule.when], verdict=rule.verdict)
     elif isinstance(rule, DiagnoseRule):
@@ -126,6 +131,7 @@ def state(ruleset: RuleSet) -> dict:
         "checks": [block_view(b) for b in sorted(CHECKS.values(), key=lambda b: b.name)],
         "actions": [block_view(b) for b in sorted(ACTIONS.values(), key=lambda b: b.name)],
         "devices": {d: {"role": role, "platform": plat} for d, (role, plat) in DEVICES.items()},
+        "jenkins": {"folder": jenkins_api.FOLDER, "url": jenkins_api.link()},
     }
 
 

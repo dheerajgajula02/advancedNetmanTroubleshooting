@@ -345,6 +345,11 @@ def cmd_watch(args) -> int:
                 first = False
             except Exception as exc:  # the memory must never stop the watcher
                 say(f"memory failed: {type(exc).__name__}: {exc}")
+            try:
+                from ts import jenkins_index
+                jenkins_index.keep_up(say)
+            except Exception as exc:  # nor the Jenkins index
+                say(f"Jenkins index failed: {type(exc).__name__}: {exc}")
             time.sleep(memory.INGEST_EVERY)
 
     threading.Thread(target=remembering, daemon=True).start()
@@ -385,6 +390,14 @@ def cmd_watch(args) -> int:
                 time.sleep(max(1.0, args.sweep - (time.time() - began)))
 
         threading.Thread(target=sweeping, daemon=True).start()
+
+    import os
+    from ts import jenkins_runs, pipelines
+    pipelines.AUTO = True
+    threading.Thread(target=pipelines.keep_in_step, args=(Path(args.rules), say), daemon=True).start()
+    if os.environ.get("TS_JENKINS", "on") != "off":
+        jenkins_runs.enable(say)
+        say("rules and repairs run as Jenkins pipelines in troubleshooting-pipelines; here if Jenkins cannot take them")
 
     from ts import monitor_ai, monitors
     threading.Thread(target=monitors.watch_forever, args=(found.put, say), daemon=True).start()
@@ -629,8 +642,49 @@ def cmd_monitor_grafana(args) -> int:
     return 0
 
 
+def cmd_jenkins_sync(args) -> int:
+    import json
+    from ts import pipelines
+    print(json.dumps(pipelines.sync(load_ruleset(args.rules).parsed), indent=1))
+    return 0
+
+
+def cmd_jenkins_status(args) -> int:
+    from ts import jenkins_api, pipelines
+    wanted = pipelines.wanted(load_ruleset(args.rules).parsed)
+    have = jenkins_api.jobs()
+    print(f"{jenkins_api.link()}  {len(have)} pipelines, {len(wanted)} rules that run")
+    for name in sorted(set(wanted) | set(have)):
+        rule = wanted.get(name)
+        state = "missing" if name not in have else "disabled" if have[name]["disabled"] else "ready"
+        print(f"  {name:<44} {state:<9} {rule.table + ' ' + rule.mode if rule else 'no rule'}")
+    return 0
+
+
+def cmd_jenkins_run(args) -> int:
+    """Run one stored run's rule again through Jenkins, to see a pipeline work. Changes nothing: fix rules are not run."""
+    from ts import engine, jenkins_runs, store
+    record = store.load(args.run)
+    if not record:
+        print(f"no run {args.run}")
+        return 1
+    rules = load_ruleset(args.rules).parsed
+    rule = next((r for r in rules if r.id == (args.rule or record["rule"]["id"])), None)
+    if rule is None or rule.table != "diagnose":
+        print("that run has no diagnose rule to replay; name one with --rule")
+        return 1
+    jenkins_runs.enable()
+    again = engine.run(rule, record["event"])
+    j = again.get("jenkins") or {}
+    print(f"{rule.id}: {again['result']['kind']} {again['result'].get('label') or again['result'].get('text') or ''}")
+    print(f"ran {j.get('ran')}: {j.get('url') or j.get('why')}")
+    return 0 if j.get("ran") == "jenkins" else 1
+
+
 def cmd_serve(args) -> int:
+    from ts import pipelines
     from ts.web import serve
+    pipelines.AUTO = True  # a rule accepted or moved on these pages gets its pipeline straight away
     serve(args.host, args.port, Path(args.rules))
     return 0
 
@@ -726,6 +780,18 @@ def build_parser() -> argparse.ArgumentParser:
     tw = sub.add_parser("train-worker", help="look after one fine-tuning job; the console starts this")
     tw.add_argument("job")
     tw.set_defaults(func=cmd_train_worker)
+    jen = sub.add_parser("jenkins", help="the rules as Jenkins pipelines").add_subparsers(dest="jenkins_command", required=True)
+    js = jen.add_parser("sync", help="create or rewrite the pipelines to match the rules")
+    js.add_argument("--rules", default=str(DEFAULT_RULES_DIR))
+    js.set_defaults(func=cmd_jenkins_sync)
+    jt = jen.add_parser("status", help="each rule's pipeline and whether it is ready")
+    jt.add_argument("--rules", default=str(DEFAULT_RULES_DIR))
+    jt.set_defaults(func=cmd_jenkins_status)
+    jr = jen.add_parser("run", help="run a stored run's diagnose rule again through its pipeline (read-only checks)")
+    jr.add_argument("run")
+    jr.add_argument("--rule")
+    jr.add_argument("--rules", default=str(DEFAULT_RULES_DIR))
+    jr.set_defaults(func=cmd_jenkins_run)
     mon = sub.add_parser("monitor", help="monitors: variables with conditions that start a run").add_subparsers(dest="monitor_command", required=True)
     mon.add_parser("list", help="the monitors and their state").set_defaults(func=cmd_monitor_list)
     mt = mon.add_parser("test", help="replay a monitor written as JSON over the past days")

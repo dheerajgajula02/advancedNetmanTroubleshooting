@@ -312,6 +312,63 @@ the watcher itself exports at `http://10.0.0.10:9810/metrics` (`ts_monitor_*`), 
 Prometheus job `ts_monitors` scrapes. Adding monitors needs no change on the Prometheus
 machine.
 
+## Jenkins
+
+Every rule and every repair is a Jenkins pipeline in the folder `troubleshooting-pipelines`
+(https://jenkins.dheerajgajula.com/job/troubleshooting-pipelines/), and every time the
+watcher runs one it is a build of that pipeline. The build shows each step as a stage,
+with the question, the check, its answer, what was seen and the evidence. A repair's build
+has the stages "Safe to change?", the change, "Did it work?", and then "Keep it as the new
+starting point" or "Undo".
+
+**How a build runs.** The troubleshooter still decides which rules apply. For each one it
+starts the rule's pipeline (`ts/jenkins_runs.py`) and serves that build on 127.0.0.1, with
+a one-time key. Each stage asks the troubleshooter, with curl, to run its step. The check
+runs here, with the lab access, change lock and scrubbing the troubleshooter already has.
+The pipeline holds the rule's routing table and picks the next stage itself. If the
+troubleshooter would go somewhere else, the build stops: the pipeline is older than its rule.
+
+**When Jenkins cannot.** If every executor is busy, Jenkins cannot be reached, or a build
+has not started within a minute, the rule runs here instead. The run page says so and why.
+If a repair's build stops after the change, the change is undone here and the lock let go,
+whether or not the build said so. A build that says nothing for three minutes while
+holding the lock is treated the same way. A repair is never run twice. `TS_JENKINS=off` in
+the watcher's environment turns all of this off.
+
+**Keeping the pipelines in step** (`ts/pipelines.py`). The pipelines are written from the
+rules, so the rule file stays the one place a rule is edited. Each pipeline carries a
+fingerprint of what it was written from. The watcher compares the rules with the last sync
+every minute and checks every pipeline in Jenkins once an hour. Accepting a rule, or moving
+one to another mode, from the Review or Rules page, the CLI or anywhere else, updates its
+pipeline straight away. A retired rule's pipeline is disabled, never deleted, so its
+builds stay. A proposed rule has no pipeline until it is accepted.
+
+**Names.** A rule's pipeline is named by its `pipeline` field, or by its id. When the AI
+suggests a rule it must name the pipeline: a few lowercase hyphenated words saying what it
+looks for. Its fix gets `<name>-fix` unless the AI names that too. Two rules may not share
+a name; the linter refuses it. The Review card shows the names before you accept.
+
+**Links.** Each run page has a "Ran in Jenkins" panel linking every build of that run: the
+rules before and after the main one, the main rule and the repair. The Rules page links
+each rule's pipeline.
+
+**Everything Jenkins has run, for the AI** (`ts/jenkins_index.py`). Every 10 minutes the
+watcher indexes each new build of every job of this network, in `data/jenkins.sqlite`. That
+covers tests, deployments, config changes, password rotation, housekeeping, and these
+pipelines. It is kept apart from the memory a run's brief is drawn from, so once-a-minute
+builds never crowd it. A job that runs dozens of times a day keeps only a line for each build that
+passed. The AI has `search_jenkins` (find builds by what they printed, by job and by result)
+and `read_build` (one build whole, a part at a time, read from disk). Its brief lists this
+run's own builds. Consoles are scrubbed like everything else, and anything that looks like
+a password, token, key or SNMP community is replaced with `[hidden]` before it is stored or
+shown. metaGlobalHack and the other jobs that are not this network's are never read.
+
+```sh
+.venv/bin/python -m ts jenkins sync      # create or rewrite the pipelines now
+.venv/bin/python -m ts jenkins status    # every pipeline and its rule
+.venv/bin/python -m ts jenkins run RUN   # replay a stored run's rule as a build; changes nothing
+```
+
 ## Collect and train
 
 Collect runs campaigns (`drills/campaign.py`): a list of situations, a number of rounds, one
@@ -353,6 +410,7 @@ the machine powers itself off if nothing touches it for 40 minutes.
 | `ts/aiconfig.py` | which model each job uses, endpoints, keys and usage |
 | `ts/monitors.py`, `ts/monitor_ai.py`, `ts/grafana_monitors.py`, `ts/monitor_page.py` | monitors: variables, watching and replaying; the AI's suggestions; the Grafana dashboard; the page |
 | `ts/collect.py`, `ts/training.py`, `ts/trainspec.py`, `deploy/trainer/` | collecting and fine-tuning |
+| `ts/pipelines.py`, `ts/jenkins_runs.py`, `ts/jenkins_api.py`, `ts/jenkins_index.py` | rules as Jenkins pipelines; serving their builds; the Jenkins API; every build indexed for the AI |
 | `deploy/backup/` | the nightly backup to pve2 and its weekly restore check |
 | `deploy/health/` | the five-minute health check and its emails |
 | `ts/web.py`, `ts/overview.py`, `ts/store.py`, `ts/static/` | the UI and the API behind it: `app.js` and `app.css` draw the pages, `index.html` and `base.css` are this service's own frame |

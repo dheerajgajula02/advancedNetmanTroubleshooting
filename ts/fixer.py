@@ -96,74 +96,134 @@ def _left_in_place(rule, values: dict) -> str:
     return "; ".join(" ".join(item["lines"]) for item in configs.touching(str(args.get("device", "")), lines if isinstance(lines, list) else [str(lines)]))
 
 
-def attempt(record: dict, rules, log=print) -> dict | None:
-    """Try to repair what this investigation found. None means no fix rule covers the cause."""
-    result = record["result"]
-    if result["kind"] != "cause":
-        return None
+def fix_values(record: dict) -> dict:
+    """The values a fix rule is filled from: the run's, with the cause's parameters on top."""
     values = dict(record.get("values") or {})
     values["alarm_device"] = values.get("device", "")  # a cause can move {device} to where the fault really is
-    values.update({k: engine.fill(str(v), values) for k, v in (result.get("params") or {}).items()})
+    values.update({k: engine.fill(str(v), values) for k, v in (record["result"].get("params") or {}).items()})
+    return values
+
+
+class Repair:
+    """One fix rule applied to one run, in stages, so it can be driven from here or from a Jenkins build.
+
+    check, then (holding the change lock) change, verify until it passes or time runs out, and
+    then settle or undo. Each stage that ends the repair returns the finished record.
+    """
+
+    def __init__(self, record: dict, rule, values: dict, log=print):
+        self.record, self.rule, self.values, self.log = record, rule, values, log
+        self.ctx = FixContext(event_time=float(record["event"]["time"]), event=record["event"])
+        self.steps: list[dict] = []
+        self.repair = {"rule": rule.id, "mode": rule.mode, "risk": rule.risk, "title": rule.title, "started": time.time(), "steps": self.steps}
+        self.done: dict | None = None
+        self.changed = False  # the network was touched, so stopping part-way means undoing
+        self.saw = ""
+        self.deadline = 0.0
+
+    def finish(self, status: str, why: str = "", expected: bool = False) -> dict:
+        self.repair.update(status=status, why=why, expected=expected, finished=time.time())
+        self.done = scrub.deep(self.repair)
+        return self.done
+
+    def check(self) -> dict | None:
+        """Everything that must hold before touching anything. The finished record if it must not go ahead."""
+        rule, values, result = self.rule, self.values, self.record["result"]
+        named = [engine.fill(v, values) for k, v in rule.action.do.args.items() if k in ("device", "also")]
+        why = _guard(named or [values.get("device", "")], result["label"])
+        if why:
+            return self.finish("held", why)
+        why = _job_in_the_way()
+        if why:
+            return self.finish("held", why, expected=True)
+        held, saw = _conditions_hold(rule.require, self.ctx, values, self.steps, "require", "Is it safe to change this now?")
+        if not held:
+            return self.finish("held", saw)
+        if rule.mode == "shadow":
+            return self.finish("would_fix", f"The fix \"{rule.title}\" is in observe-only mode, so it did not run.")
+        earlier = _left_in_place(rule, values)
+        if earlier:
+            self.repair["in_the_way"] = True
+            return self.finish("held", f"This repair would alter something earlier work left in place on purpose: {earlier}. That needs weighing up, which a rule cannot do.")
+        look = firstlook.take(self.record["event"], run_id=self.record.get("id", ""))
+        self.record["first_look"] = look
+        if look["working"]["verdict"] == "no":
+            return self.finish("held", "There is no record of this ever working, so there is nothing to put back. A person should decide what it is meant to do.")
+        return None
+
+    def change(self) -> dict | None:
+        """Make the change. The caller holds the change lock. The finished record if that already settles it."""
+        args, res = _run_call(self.rule.action.do, self.ctx, self.values)
+        self.steps.append(_step("do", self.rule.title, self.rule.action.do, args, res))
+        self.changed, self.saw = True, res.saw
+        if res.outcome == "nothing":
+            self.changed = False
+            return self.finish("already", res.saw)
+        if res.outcome != "done":
+            return self.undo(res.saw)
+        self.deadline = time.time() + VERIFY_FOR
+        return None
+
+    def verify(self) -> tuple[str, str]:
+        """One look at whether it worked: ("ok" | "not_yet" | "gave_up", what was seen)."""
+        attempt_steps: list[dict] = []
+        ok, saw = _conditions_hold(self.rule.verify, self.ctx, self.values, attempt_steps, "verify", "Did it work?")
+        if ok or time.time() >= self.deadline:
+            self.steps.extend(attempt_steps)
+            return ("ok" if ok else "gave_up"), saw
+        return "not_yet", saw
+
+    def undo(self, why: str) -> dict:
+        _undo(self.ctx, self.steps, self.log)
+        self.changed = False
+        return self.finish("failed", why)
+
+    def settle(self) -> dict:
+        for device in self.ctx.changed:  # what is running now is the new starting point for spotting the next change
+            _shown, lines = configs.running(device)
+            if lines is not None:
+                configs.save_baseline(device, lines)
+        time.sleep(SETTLE)
+        self.changed = False
+        return self.finish("fixed", self.saw)
+
+
+def run_here(record: dict, rule, values: dict, log=print) -> dict:
+    """Apply a fix rule in this process, every stage in order."""
+    repair = Repair(record, rule, values, log)
+    stopped = repair.check()
+    if stopped:
+        return stopped
+    try:
+        with lab.change_lock():
+            stopped = repair.change()
+            if stopped:
+                return stopped
+            while True:
+                state, saw = repair.verify()
+                if state != "not_yet":
+                    break
+                time.sleep(VERIFY_EVERY)
+            if state != "ok":
+                return repair.undo(f"It did not take effect: {saw}")
+            return repair.settle()
+    except lab.LockBusy:
+        return repair.finish("held", "Another job held the network change lock, so I left it alone.", expected=True)
+
+
+# Who applies a fix rule. The watcher points this at Jenkins (ts/jenkins_runs.py), which falls back to run_here.
+APPLY = run_here
+
+
+def attempt(record: dict, rules, log=print) -> dict | None:
+    """Try to repair what this investigation found. None means no fix rule covers the cause."""
+    if record["result"]["kind"] != "cause":
+        return None
+    values = fix_values(record)
     rule = find_rule(rules, record, values)
     if rule is None:
         return None
-    ctx = FixContext(event_time=float(record["event"]["time"]), event=record["event"])
-    steps: list[dict] = []
-    repair = {"rule": rule.id, "mode": rule.mode, "risk": rule.risk, "title": rule.title, "started": time.time(), "steps": steps}
-
-    def finish(status: str, why: str = "", expected: bool = False) -> dict:
-        repair.update(status=status, why=why, expected=expected, finished=time.time())
-        return scrub.deep(repair)
-
-    named = [engine.fill(v, values) for k, v in rule.action.do.args.items() if k in ("device", "also")]
-    why = _guard(named or [values.get("device", "")], result["label"])
-    if why:
-        return finish("held", why)
-    why = _job_in_the_way()
-    if why:
-        return finish("held", why, expected=True)
-    held, saw = _conditions_hold(rule.require, ctx, values, steps, "require", "Is it safe to change this now?")
-    if not held:
-        return finish("held", saw)
-    if rule.mode == "shadow":
-        return finish("would_fix", f"The fix \"{rule.title}\" is in observe-only mode, so it did not run.")
-    earlier = _left_in_place(rule, values)
-    if earlier:
-        repair["in_the_way"] = True
-        return finish("held", f"This repair would alter something earlier work left in place on purpose: {earlier}. That needs weighing up, which a rule cannot do.")
-    look = firstlook.take(record["event"], run_id=record.get("id", ""))
-    record["first_look"] = look
-    if look["working"]["verdict"] == "no":
-        return finish("held", "There is no record of this ever working, so there is nothing to put back. A person should decide what it is meant to do.")
-    try:
-        with lab.change_lock():
-            ask = rule.title
-            args, res = _run_call(rule.action.do, ctx, values)
-            steps.append(_step("do", ask, rule.action.do, args, res))
-            if res.outcome == "nothing":
-                return finish("already", res.saw)
-            if res.outcome != "done":
-                _undo(ctx, steps, log)
-                return finish("failed", res.saw)
-            deadline = time.time() + VERIFY_FOR
-            while True:
-                attempt_steps: list[dict] = []
-                ok, saw = _conditions_hold(rule.verify, ctx, values, attempt_steps, "verify", "Did it work?")
-                if ok or time.time() >= deadline:
-                    steps.extend(attempt_steps)
-                    break
-                time.sleep(VERIFY_EVERY)
-            if not ok:
-                _undo(ctx, steps, log)
-                return finish("failed", f"It did not take effect: {saw}")
-            for device in ctx.changed:  # what is running now is the new starting point for spotting the next change
-                _shown, lines = configs.running(device)
-                if lines is not None:
-                    configs.save_baseline(device, lines)
-            time.sleep(SETTLE)
-            return finish("fixed", res.saw)
-    except lab.LockBusy:
-        return finish("held", "Another job held the network change lock, so I left it alone.", expected=True)
+    return APPLY(record, rule, values, log)
 
 
 def _undo(ctx: FixContext, steps: list, log) -> None:

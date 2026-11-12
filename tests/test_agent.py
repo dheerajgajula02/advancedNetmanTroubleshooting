@@ -274,7 +274,7 @@ def test_a_check_tool_refuses_the_isp_router(world):
 # --- suggesting a rule --------------------------------------------------------
 
 def rule_args(**kw):
-    return {"id": "forward-blocked", "title": "A firewall rule blocks forwarding on r3", "description": "Look for a DROP in the forward chain.", "why": "The normal checks do not read the firewall.",
+    return {"id": "forward-blocked", "pipeline": "forward-chain-drop", "title": "A firewall rule blocks forwarding on r3", "description": "Look for a DROP in the forward chain.", "why": "The normal checks do not read the firewall.",
             "trigger": {"tags": ["service/internet"]}, "position": "end",
             "steps": [{"ask": "Is forwarding blocked on r3?", "check": "output_has", "args": {"device": "r3", "command": "iptables -S FORWARD", "text": "-j DROP"}, "then": {"found": "cause firewall.forward_blocked device=r3"}}],
             "causes": {"firewall.forward_blocked": "{device} has a firewall rule dropping forwarded traffic."},
@@ -296,6 +296,7 @@ def test_a_good_rule_is_saved_with_its_proof(world):
     row = review.get(s.proposals[0])
     assert row["status"] == "pending" and row["proof"]["replay"]["reached"] == "firewall.forward_blocked" and row["run_id"] == "this-run"
     assert [r["table"] for r in row["body"]["rules"]] == ["diagnose", "fix"]
+    assert [r["pipeline"] for r in row["body"]["rules"]] == ["forward-chain-drop", "forward-chain-drop-fix"]  # each becomes a Jenkins pipeline of that name
     assert load_ruleset(world["root"]).get("forward-blocked") is None  # it waits for a person
 
 
@@ -307,6 +308,7 @@ def test_an_accepted_rule_runs_without_the_ai(world, monkeypatch):
     chain = [r.id for r in engine.chain_for(rules, run()["event"]) if r.source.by != "ai" or r.id == "forward-blocked"]  # whatever else has been accepted by now
     assert chain == ["internet-unreachable", "forward-blocked"]
     assert fixer.find_rule(rules, {"result": {"label": "firewall.forward_blocked"}}, {"device": "r3"}).id == "forward-blocked-fix"
+    assert {r.id: r.pipeline for r in rules if r.id.startswith("forward-blocked")} == {"forward-blocked": "forward-chain-drop", "forward-blocked-fix": "forward-chain-drop-fix"}
 
 
 def test_a_suggested_fix_is_only_picked_where_it_can_work(world):
@@ -370,7 +372,7 @@ def test_a_rule_using_a_check_replays_what_the_check_said(world):
     assert out["outcome"] == "saved", out
 
 
-@pytest.mark.parametrize("change,word", [({"position": "main"}, "position"), ({"id": "Bad Id"}, "lowercase"), ({"trigger": {"tags": []}}, "tag"), ({"trigger": {"tags": ["made/up"]}}, "not a tag"), ({"id": "interface-down"}, "already exists"), ({"steps": [{"ask": "Anything here?", "check": "made_up", "args": {}}]}, "registered")])
+@pytest.mark.parametrize("change,word", [({"position": "main"}, "position"), ({"id": "Bad Id"}, "lowercase"), ({"trigger": {"tags": []}}, "tag"), ({"trigger": {"tags": ["made/up"]}}, "not a tag"), ({"id": "interface-down"}, "already exists"), ({"steps": [{"ask": "Anything here?", "check": "made_up", "args": {}}]}, "registered"), ({"pipeline": "interface-down"}, "already belongs"), ({"pipeline": "Bad_Name"}, "lowercase")])
 def test_a_broken_rule_comes_back_with_the_reason(world, change, word):
     out = tools.call(having_seen(world), "propose_rule", rule_args(**change))
     assert out["outcome"] == "invalid" and word in out["saw"], out

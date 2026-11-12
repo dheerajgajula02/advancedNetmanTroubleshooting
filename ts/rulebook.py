@@ -57,7 +57,13 @@ def install(root: Path, raws: list[dict], mode: str, by: str) -> list[str]:
         tmp.write_text(yaml.safe_dump(raw, sort_keys=False))
         tmp.replace(dest)
         written.append(rule.id)
+    _pipelines_follow(root)
     return written
+
+
+def _pipelines_follow(root: Path) -> None:
+    from ts import pipelines
+    pipelines.sync_soon(root)
 
 
 def set_mode(root: Path, rule_id: str, mode: str, by: str) -> None:
@@ -77,3 +83,4 @@ def set_mode(root: Path, rule_id: str, mode: str, by: str) -> None:
     tmp = loaded.path.with_suffix(".tmp")
     tmp.write_text(yaml.safe_dump(raw, sort_keys=False))
     tmp.replace(loaded.path)
+    _pipelines_follow(root)

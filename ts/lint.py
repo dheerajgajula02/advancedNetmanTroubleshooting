@@ -359,6 +359,13 @@ class _Linter:
         ids = [r.id for r in self.rules]
         for dup in sorted({i for i in ids if ids.count(i) > 1}):
             self.issues.append(Issue("error", dup, "rule id used more than once"))
+        piped: dict[str, str] = {}  # each diagnose and fix rule runs as its own Jenkins pipeline
+        for rule in sorted(self.rules, key=lambda r: r.id):
+            if isinstance(rule, (DiagnoseRule, FixRule)):
+                name = getattr(rule, "pipeline", None) or rule.id
+                if piped.get(name, rule.id) != rule.id:
+                    self.error(rule, f"its Jenkins pipeline {name} already belongs to the rule {piped[name]}")
+                piped.setdefault(name, rule.id)
         for rule in self.rules:
             self.lint_match(rule)
         for rule in self.rules:

@@ -18,11 +18,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from ts import brain, cards, configs, engine, fixer, history, lab, memory, rag, review, rulebook, safety, scrub, store, sweep, tags, tickets
+from ts import brain, cards, configs, engine, fixer, history, jenkins_index, lab, memory, pipelines, rag, review, rulebook, safety, scrub, store, sweep, tags, tickets
 from ts.lint import errors
 from ts.registry import ACTIONS, CHECKS, Block, load_blocks
 from ts.ruleset import DEFAULT_RULES_DIR, load_ruleset
-from ts.schema import Outcome, RuleLoadError
+from ts.schema import PIPELINE, Outcome, RuleLoadError
 from ts.vocab import DEVICES, FORBIDDEN_DEVICES
 
 load_blocks()
@@ -41,6 +41,7 @@ SECOND_LOOK = 20           # a flapping port comes and goes, so for a stop-gap o
 MAX_ASKS = 6               # questions to the person, per run
 LLM_OUTPUT = 2500          # how much of a command's output goes back to the model
 RULE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{2,55}$")
+PIPELINE_NAME = re.compile(PIPELINE)
 
 
 def health() -> set[str]:
@@ -153,6 +154,31 @@ def _search_memory(session: Session, args: dict) -> dict:
     return {"outcome": "ok", "saw": f"{len(found)} records.", "output": "\n".join(f"{time.strftime('%m-%d %H:%M', time.localtime(m['time']))} [{m['source']}] {m['title']}" + (f" | {m['text']}" if m.get("text") else "") + (f" (seen {m['times_seen']} times)" if m["times_seen"] > 1 else "") for m in found)}
 
 
+def _search_jenkins(session: Session, args: dict) -> dict:
+    text, job, result = args.get("text") or "", args.get("job") or "", args.get("result") or ""
+    if not (text or job or result):
+        rows = jenkins_index.jobs()
+        return {"outcome": "ok", "saw": f"{len(rows)} jobs.", "output": "\n".join(
+            f"{r['job']}: latest #{r['last']} {r['result'] or ''} {time.strftime('%m-%d %H:%M', time.localtime(r['start'])) if r['start'] else ''}" + (" (runs many times a day)" if r["frequent"] else "") for r in rows)}
+    found = jenkins_index.search(text, job, result, 12)
+    if not found:
+        return {"outcome": "ok", "saw": "No build matches that.", "output": "No Jenkins build matches. Try other words, a shorter job name, or no filters to list the jobs."}
+    lines = [f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(b['start']))} {b['job']} #{b['number']} {b['result']}, {b['seconds']:.0f} s" + (f", {b['started_by']}" if b["started_by"] else "")
+             + f"\n  {' '.join(b['text'].split())[:400]}" for b in found]
+    return {"outcome": "ok", "saw": f"{len(found)} builds.", "output": "\n".join(lines)}
+
+
+def _read_build(session: Session, args: dict) -> dict:
+    try:
+        got = jenkins_index.read(str(args.get("job") or ""), int(args.get("number")), int(args.get("part") or 1))
+    except (TypeError, ValueError):
+        got = None
+    if not got:
+        return {"outcome": "invalid", "saw": "There is no such build. search_jenkins lists the jobs and their builds."}
+    return {"outcome": "ok", "saw": f"{got['job']} #{got['number']}, part {got['part']} of {got['parts']}.",
+            "output": f"{got['summary']}\n{got['url']}\nPart {got['part']} of {got['parts']} of what it printed" + (", ask for the next part to read on" if got["part"] < got["parts"] else "") + f":\n\n{got['console']}"}
+
+
 def _search_runs(session: Session, args: dict) -> dict:
     hits, _by_meaning = rag.find(args["text"], rag.names_in(args["text"]), exclude={session.run_id}, k=10)
     hits = [hit for hit in hits if hit["close"]]
@@ -193,8 +219,10 @@ def _list_rules(session: Session, args: dict) -> dict:
     for rule in load_ruleset(session.root).parsed:
         if rule.table == "diagnose" and (not wanted or tags.covers(wanted, rule.tags) or tags.covers(rule.tags, wanted)):
             causes = sorted({o.target for s in rule.steps for o in s.then.values() if o.kind == "cause"})
-            lines.append(f"{rule.id} [{rule.position}, {rule.mode}] tags {','.join(rule.tags)}: checks {', '.join(s.check.name for s in rule.steps)}; finds {', '.join(causes) or 'nothing named'}")
-    return {"outcome": "ok", "saw": f"{len(lines)} rules.", "output": "\n".join(lines)}
+            lines.append(f"{rule.id} [{rule.position}, {rule.mode}] pipeline {pipelines.name_of(rule)} tags {','.join(rule.tags)}: checks {', '.join(s.check.name for s in rule.steps)}; finds {', '.join(causes) or 'nothing named'}")
+    taken = sorted(pipelines.name_of(r) for r in load_ruleset(session.root).parsed if r.table == "fix")
+    lines.append(f"Repair pipelines already taken: {', '.join(taken)}")
+    return {"outcome": "ok", "saw": f"{len(lines) - 1} rules.", "output": "\n".join(lines)}
 
 
 # --- changing -------------------------------------------------------------
@@ -434,13 +462,13 @@ def _build(session: Session, a: dict) -> list[dict]:
     match = {"tags": wanted, **{k: a["trigger"][k] for k in ("platform", "role", "event") if a["trigger"].get(k)}}
     source = {"by": "ai", "incident": session.run_id, "note": session.model or "AI"}
     steps = [{"id": f"s{n}", "ask": s["ask"], "check": {"name": s["check"], "args": s.get("args") or {}}, "then": s.get("then") or {}} for n, s in enumerate(a["steps"], 1)]
-    rules = [{"id": a["id"], "title": a["title"], "table": "diagnose", "priority": 100, "description": a["description"], "trigger": f"Runs for {', '.join(wanted)}, at the {position} of the checks.",
+    rules = [{"id": a["id"], "pipeline": a["pipeline"], "title": a["title"], "table": "diagnose", "priority": 100, "description": a["description"], "trigger": f"Runs for {', '.join(wanted)}, at the {position} of the checks.",
               "match": match, "mode": "proposed", "position": position, "tags": wanted, "source": source, "steps": steps, "causes": a["causes"],
               "end": "stop This rule's checks found nothing, so the others carry on."}]
     fix = a.get("fix")
     if fix:
         do = {"name": fix["action"], "args": fix.get("args") or {}}
-        rules.append({"id": f"{a['id']}-fix", "title": fix["title"], "table": "fix", "priority": 100, "description": fix.get("description") or fix["title"] + " (suggested by the AI)", "match": {"cause": sorted(a["causes"]), **({"platform": where} if (where := _where_it_works(fix)) else {})},
+        rules.append({"id": f"{a['id']}-fix", "pipeline": fix.get("pipeline") or f"{a['pipeline']}-fix", "title": fix["title"], "table": "fix", "priority": 100, "description": fix.get("description") or fix["title"] + " (suggested by the AI)", "match": {"cause": sorted(a["causes"]), **({"platform": where} if (where := _where_it_works(fix)) else {})},
                       "mode": "proposed", "position": "main", "tags": wanted, "source": source, "require": ["change_window_open == closed"], "action": {"do": do},
                       "verify": [{"check": {"name": v["check"], "args": v.get("args") or {}}, "expect": v["expect"]} for v in fix["verify"]], "risk": fix.get("risk", "medium")})
     return rules
@@ -487,6 +515,14 @@ def _propose_rule(session: Session, a: dict) -> dict:
         a["fix"] = {**a["fix"], "verify": [{**v, "check": _bare(v.get("check"))} for v in a["fix"].get("verify") or []]}
     if not RULE_ID.match(a.get("id", "")):
         return {"outcome": "invalid", "saw": "id must be lowercase words joined by hyphens, 3 to 56 characters."}
+    a["pipeline"] = a.get("pipeline") or a["id"]
+    named = [a["pipeline"]] + ([a["fix"]["pipeline"]] if isinstance(a.get("fix"), dict) and a["fix"].get("pipeline") else [])
+    if not all(PIPELINE_NAME.match(n) and len(n) <= 60 for n in named):
+        return {"outcome": "invalid", "saw": "pipeline (and fix.pipeline) must be lowercase words joined by single hyphens, 3 to 60 characters, such as ospf-hello-timer-mismatch."}
+    for name in named:
+        taken = pipelines.clash(load_ruleset(session.root).parsed, name, "")
+        if taken:
+            return {"outcome": "invalid", "saw": f"{taken} Pick another name for the Jenkins pipeline."}
     if a.get("position") not in ("beginning", "end"):
         return {"outcome": "invalid", "saw": "position must be beginning or end. The main rule for a trigger is not replaced by a suggestion."}
     if not a.get("trigger", {}).get("tags"):
@@ -617,7 +653,10 @@ _STEP = _object({"ask": {**STR, "description": "The question this step answers, 
                  "args": {"type": "object", "description": "Use {device} and other event fields so the rule works elsewhere"},
                  "then": {"type": "object", "description": "Answer -> 'cause area.what', 'cause area.what device=r3', 'stop message', 'escalate message'. Answers left out go on to the next step."}}, ["ask", "check", "args"])
 _FIX = _object({"title": STR, "action": {**STR, "description": "An action name, such as config_lines, linux_change or converge_config"}, "args": {"type": "object"},
-                "verify": {"type": "array", "items": _object({"check": STR, "args": {"type": "object"}, "expect": STRS}, ["check", "args", "expect"])}, "risk": {"type": "string", "enum": ["low", "medium"]}}, ["title", "action", "args", "verify"])
+                "verify": {"type": "array", "items": _object({"check": STR, "args": {"type": "object"}, "expect": STRS}, ["check", "args", "expect"])}, "risk": {"type": "string", "enum": ["low", "medium"]},
+                "pipeline": {**STR, "description": "The Jenkins pipeline this repair becomes. Leave it out to use the rule's pipeline name with -fix on the end."}}, ["title", "action", "args", "verify"])
+_PIPELINE = {**STR, "description": "The name of the Jenkins pipeline this rule becomes, in the troubleshooting-pipelines folder. Every run of the rule is a build of it. "
+                                   "Lowercase words joined by hyphens, 3 to 60 characters, saying what it looks for, such as ospf-hello-timer-mismatch. It must not be one list_rules already shows."}
 _TEMPORARY = {"type": "boolean", "description": "True for a stop-gap that keeps people working until someone can do the real repair, such as raising OSPF cost to move traffic off a flapping link. It is kept if its verify passes and nothing new breaks, and stays through the automatic return to known-good config until the work is closed."}
 _FIRST = {"was_working": {**STR, "description": "Your answer to the first question, from the first look in your brief: was this working before, and until when?"},
           "what_changed": {**STR, "description": "Your answer to the second question: what differs from known-good or changed recently, and does it explain this?"}}
@@ -629,6 +668,9 @@ def _fixed_tools() -> list[Tool]:
     return [
         Tool("show", "Run one read-only command on a device: a show command on routers and switches, or ip, ss, ps, iptables -S, tc qdisc show, sysctl, cat of /proc/net on Linux routers and hosts.", _object({"device": STR, "command": STR}, ["device", "command"]), _show),
         Tool("search_memory", "Search everything the monitoring, jobs and git have recorded over the past weeks.", _object({"text": STR}, ["text"]), _search_memory),
+        Tool("search_jenkins", "Search every Jenkins build of this network's jobs: tests, deployments, config changes, password rotation, housekeeping, and the troubleshooting-pipelines builds of the rules themselves. Finds what ran, when, who or what started it, how it ended and what its console printed. Narrow it with job (all or part of a job name) and result (SUCCESS, FAILURE, UNSTABLE, ABORTED). With nothing at all it lists every job and its latest build. read_build reads one build whole.",
+             _object({"text": {**STR, "description": "Words to look for, such as an error, a device or a test name. Empty lists the latest builds."}, "job": STR, "result": STR}, []), _search_jenkins),
+        Tool("read_build", "Read one Jenkins build whole: what started it, its parameters, and everything its console printed, a part at a time.", _object({"job": {**STR, "description": "The job's full name, as search_jenkins shows it"}, "number": {"type": "integer"}, "part": {"type": "integer", "description": "Which part of a long console, from 1"}}, ["job", "number"]), _read_build),
         Tool("search_runs", "Search inside every past investigation, by meaning and by exact words: symptoms, causes, every command and what it printed, every change, what people decided. A cause name or an exact command or error text works as well as a description. Gives each run's id, cause and note, and the passage that matched. Says so when nothing matches. open_run reads one in full, and propose_tag and propose_backdate need the ids.", _object({"text": STR}, ["text"]), _search_runs),
         Tool("open_run", "Read one past investigation in full: every check, every command with its output, every change and what people decided.", _object({"run_id": STR}, ["run_id"]), _open_run),
         Tool("recall_my_notes", "Search your own notes: what you concluded on earlier work, what you changed, and whether it held up once the person answered.", _object({"text": STR}, ["text"]), _recall_notes),
@@ -641,11 +683,11 @@ def _fixed_tools() -> list[Tool]:
              _object({"run": {**STR, "description": "The run that made it, as listed in your brief"}, "earlier_change": {**STR, "description": "What you saw that shows the reason for it is gone. Evidence over time, not one good test."}, "why": STR, "verify": {**_VERIFY, "description": "A check showing the trouble you are working on, failing now because of this earlier change, that should pass once it is out."}, **_FIRST},
                      ["run", "earlier_change", "why", "verify", "was_working", "what_changed"]), _retire, "change"),
         Tool("propose_rule", "Suggest a rule so this becomes a predictable step next time. A person reviews it. Every step must be something you actually ran on this incident: it is replayed against what you saw and must reach its cause.",
-             _object({"id": STR, "title": STR, "description": STR, "why": STR,
+             _object({"id": STR, "pipeline": _PIPELINE, "title": STR, "description": STR, "why": STR,
                       "trigger": _object({"tags": {**STRS, "description": "What kind of trouble it runs for: an area such as routing, or a tag such as routing/ospf"}, "platform": STR, "role": STR}, ["tags"]),
                       "position": {"type": "string", "enum": ["beginning", "end"], "description": "beginning: before the normal checks, for something cheap that settles it. end: only once the normal checks have run out."},
                       "steps": {"type": "array", "items": _STEP}, "causes": {"type": "object", "description": "Cause label (area.what) -> one plain sentence"}, "fix": _FIX},
-                     ["id", "title", "description", "why", "trigger", "position", "steps", "causes"]), _propose_rule, "propose"),
+                     ["id", "pipeline", "title", "description", "why", "trigger", "position", "steps", "causes"]), _propose_rule, "propose"),
         Tool("propose_tag", "Suggest a new tag, only when no existing tag fits. Areas are fixed. Include the past runs it should go on.", _object({"name": STR, "area": STR, "description": STR, "why": STR, "events": {**STRS, "description": "Event types that should carry this tag, if any"}, "runs": _RUNS}, ["name", "area", "description", "why"]), _propose_tag, "propose"),
         Tool("propose_backdate", "Suggest adding an existing tag to past runs that should have it.", _object({"tag": STR, "why": STR, "runs": _RUNS}, ["tag", "why", "runs"]), _propose_backdate, "propose"),
         Tool("ask_customer", "Write to the person who reported this and wait for their answer: what they see, whether it is happening right now, or the result of a command you ask them to run on their computer. One request at a time, in plain words, with the exact command to type. No device names or jargon.", _object({"message": STR}, ["message"]), _ask_customer, "ask"),

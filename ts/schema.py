@@ -23,6 +23,7 @@ load_blocks()
 
 PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 RULE_ID = r"^[a-z0-9][a-z0-9-]{2,63}$"
+PIPELINE = r"^[a-z0-9]+(-[a-z0-9]+)*$"  # a Jenkins pipeline's name in troubleshooting-pipelines
 STEP_ID = r"^[a-z0-9][a-z0-9_-]{0,40}$"
 CAUSE_LABEL = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_{}]+)+$")
 IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*$")
@@ -307,6 +308,8 @@ class RuleBase(Strict):
     position: Literal["beginning", "main", "end"] = "main"
     source: Source
     tags: list[str] = Field(default_factory=list)
+    # The Jenkins pipeline that runs it, in the troubleshooting-pipelines folder. The rule's id when left out.
+    pipeline: str | None = Field(default=None, pattern=PIPELINE, min_length=3, max_length=60)
 
     @field_validator("match")
     @classmethod
