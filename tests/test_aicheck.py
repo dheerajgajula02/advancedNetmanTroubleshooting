@@ -113,6 +113,29 @@ def test_working_sends_no_email_unless_it_keeps_coming_back(turn):
     assert not report.should_send(rec)
 
 
+@pytest.mark.parametrize("learned, change_running, handed_over", [(True, False, True), (False, False, False), (True, True, False)])
+def test_a_cause_whose_repair_only_watched_goes_to_the_check(world, monkeypatch, learned, change_running, handed_over):  # noqa: F811
+    """Rules the AI wrote found the cause, but its repair is observe-only: nothing changed, so the AI checks it
+    (live test 2026-11-14: r3 forwarding off was found, the repair only watched, and the run ended with r3 still broken)."""
+    monkeypatch.setattr(fixer, "attempt", lambda rec, rules, log=print: {"status": "would_fix", "rule": "border-ip-forwarding-off-fix", "mode": "shadow"})
+    monkeypatch.setattr(pipeline, "conclude", lambda rec, log=print: None)
+    rec = learned_run(result={"kind": "cause", "label": "config.forwarding_disabled", "text": "r3 has IPv4 forwarding off"})
+    rec["learned"] = learned
+    rec["event"]["change_running"] = change_running
+    pipeline.finish(rec, load_ruleset(world["root"]).parsed, lambda _m: None, inline=False, root=world["root"])
+    assert (rec.get("agent") or {}).get("status") == ("queued" if handed_over else None)
+    if handed_over:
+        assert "observe-only" in rec["agent"]["why"]
+
+
+def test_a_cause_only_a_person_can_fix_is_not_checked_for_a_watching_repair(world, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(fixer, "attempt", lambda rec, rules, log=print: {"status": "would_fix", "rule": "x", "mode": "shadow"})
+    monkeypatch.setattr(pipeline, "conclude", lambda rec, log=print: None)
+    rec = learned_run(result={"kind": "cause", "label": "link.physical_fault", "text": "the cable is cut"})
+    pipeline.finish(rec, load_ruleset(world["root"]).parsed, lambda _m: None, inline=False, root=world["root"])
+    assert "agent" not in rec
+
+
 def test_finish_does_not_stop_a_learned_run_before_its_check(world, monkeypatch):  # noqa: F811
     monkeypatch.setattr(agent, "blocked", lambda rec: pytest.fail("checked the limits before the AI check"))
     rec = learned_run()

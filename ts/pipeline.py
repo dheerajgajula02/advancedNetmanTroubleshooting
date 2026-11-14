@@ -83,6 +83,8 @@ def finish(record: dict, rules, log=print, inline: bool = True, root=DEFAULT_RUL
     checking = aicheck.wanted(record)
     if not why and checking and _learned_repair_worked(record, rules):
         why = "A repair the AI wrote ran. The AI checks that the trouble is really gone."
+    if not why and checking and _repair_only_watched(record):
+        why = "The rules found the cause, but its repair is in observe-only mode, so nothing was changed. The AI checks whether it is still broken."
     if why:
         # With rules the AI wrote, the AI checks first whether it is still broken; the support agent's limits apply after that.
         stopped = None if checking else safely("handover", lambda: agent.blocked(record), "The AI could not be started.")
@@ -99,6 +101,15 @@ def finish(record: dict, rules, log=print, inline: bool = True, root=DEFAULT_RUL
 def _learned_repair_worked(record: dict, rules) -> bool:
     fix = record.get("repair") or {}
     return fix.get("status") == "fixed" and any(r.id == fix.get("rule") and r.source.by == "ai" for r in rules)
+
+
+def _repair_only_watched(record: dict) -> bool:
+    """The rules found a cause a machine can fix, and its repair is observe-only, so the network was left as it was.
+    After rules the AI wrote, that still goes to the AI check: a known cause with nothing done about it is not dealt with."""
+    r, fix = record["result"], record.get("repair") or {}
+    if record["event"].get("change_running") or fix.get("expected"):
+        return False
+    return r["kind"] == "cause" and not agent.PERSON_ONLY.match(r.get("label") or "") and fix.get("status") == "would_fix"
 
 
 def _check_first(record: dict, rules, log, root) -> bool:
