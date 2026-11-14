@@ -312,6 +312,36 @@ the watcher itself exports at `http://10.0.0.10:9810/metrics` (`ts_monitor_*`), 
 Prometheus job `ts_monitors` scrapes. Adding monitors needs no change on the Prometheus
 machine.
 
+## ServiceNow and Salesforce
+
+The desk connects to the ticketing system a company already runs (`ts/connectors/`), both ways:
+
+- **Their tickets come in.** A new incident in ServiceNow with category Network, or a new case in
+  Salesforce from a known contact, becomes a desk ticket and is worked like any other. What the
+  person writes there later is added to our ticket. Our replies go back as comments, our internal
+  notes as work notes, and our status follows into theirs: In Progress, On Hold (awaiting caller),
+  Resolved with a close code read from the instance.
+- **Our finds go out.** When a run the watcher started on its own is worth an email, the same story
+  opens an incident there. It is resolved at once when the run fixed it, and left open for a person
+  when it did not.
+
+A connector is on when its login file exists: `secrets/servicenow.env` (`SN_INSTANCE`, `SN_USER`,
+`SN_PASSWORD`, Table API with basic auth) or `secrets/salesforce.env` (`SF_DOMAIN`, `SF_CLIENT_ID`,
+`SF_CLIENT_SECRET`, an External Client App with the client-credentials flow).
+`sh deploy/connectors/set-login.sh servicenow` writes the file without echoing the password. The
+watcher syncs every 15 seconds. Only tickets made after a connector is first switched on come in,
+and our own comments are recognised when they come back, so nothing is imported or echoed twice.
+
+```
+python -m ts connector status                 # what is connected and what was synced
+python -m ts connector setup servicenow       # add the desk's people as callers there
+python -m ts connector file servicenow --person priya "Internet not working" "Nothing loads since lunch."
+python -m ts connector sync                   # one pass now
+```
+
+`tests/test_connectors.py` covers both directions against an in-memory system and checks the
+requests sent to ServiceNow's and Salesforce's APIs.
+
 ## Jenkins
 
 Every rule and every repair is a Jenkins pipeline in the folder `troubleshooting-pipelines`

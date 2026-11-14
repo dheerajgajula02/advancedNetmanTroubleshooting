@@ -172,4 +172,5 @@ def conclude(record: dict, log=print) -> None:
     safely("index", lambda: history.add_run(record))
     safely("past runs", lambda: cards.remember_soon(record))
     safely("monitor ideas", lambda: monitor_ai.after_run(record))
+    safely("ticketing systems", lambda: __import__("ts.connectors.sync", fromlist=["after_run"]).after_run(record))
     capture.run(record)

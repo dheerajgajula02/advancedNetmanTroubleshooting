@@ -374,6 +374,8 @@ def cmd_watch(args) -> int:
 
     from ts import tickets
     threading.Thread(target=tickets.work_forever, args=(investigate, say), daemon=True).start()
+    from ts.connectors import sync as connector_sync
+    connector_sync.start(say)  # ServiceNow / Salesforce, when their login files are present
     waiting = Waiting()
 
     def wait_for(event: dict, how: str) -> None:
@@ -584,6 +586,54 @@ def cmd_train_worker(args) -> int:
 def _spec_from(path: str) -> dict:
     import json
     return json.loads(Path(path).read_text())
+
+
+def cmd_connector_status(args) -> int:
+    import time
+    from ts import connectors
+    from ts.connectors import sync
+    found = connectors.configured()
+    print("connected: " + (", ".join(c.label for c in found) or "none (add secrets/servicenow.env or secrets/salesforce.env)"))
+    for c in found:
+        try:
+            print(f"  {c.label}: {c.ping()}")
+        except connectors.ConnectorError as exc:
+            print(f"  {c.label}: {exc}")
+    state = sync.status()
+    for row in state["systems"]:
+        print(f"  {row['system']}: tickets since {time.strftime('%m-%d %H:%M', time.localtime(row['since']))}, last pass {time.strftime('%H:%M:%S', time.localtime(row['last_pass']))}" + (f", error: {row['last_error']}" if row["last_error"] else ""))
+    for row in state["links"][:10]:
+        print(f"  {row['system']:<10} {row['number']:<12} T-{row['ticket']:<5} {row['status']}")
+    for row in state["outbound"][:10]:
+        print(f"  {row['system']:<10} {row['number']:<12} from run {row['run_id']}")
+    return 0
+
+
+def cmd_connector_setup(args) -> int:
+    from ts import connectors, tickets
+    c = connectors.by_name(args.system)
+    print(c.ping())
+    made = c.ensure_people(tickets.PEOPLE)
+    print(f"{c.label}: added {', '.join(made)}" if made else f"{c.label}: everyone the desk looks after is already there")
+    return 0
+
+
+def cmd_connector_file(args) -> int:
+    from ts import connectors, tickets
+    c = connectors.by_name(args.system)
+    who = tickets.person(args.person)
+    if who is None:
+        print("person must be one of: " + ", ".join(p["id"] for p in tickets.PEOPLE))
+        return 2
+    made = c.file_as(who, args.subject, args.body or args.subject)
+    print(f"{c.label} {made['number']} filed as {who['name']}: {made['url']}")
+    return 0
+
+
+def cmd_connector_sync(args) -> int:
+    from ts.connectors import sync
+    print(sync.sync_once())
+    return 0
 
 
 def cmd_monitor_list(args) -> int:
@@ -829,6 +879,18 @@ def build_parser() -> argparse.ArgumentParser:
     mg.add_argument("--anyway", action="store_true", help="even if the watcher would skip this run")
     mg.set_defaults(func=cmd_monitor_suggest)
     mon.add_parser("grafana", help="rebuild the Grafana dashboard of monitors").set_defaults(func=cmd_monitor_grafana)
+    con = sub.add_parser("connector", help="ServiceNow and Salesforce: their tickets come to the desk, our finds go to them").add_subparsers(dest="connector_command", required=True)
+    con.add_parser("status", help="which systems are connected and what was synced").set_defaults(func=cmd_connector_status)
+    cs = con.add_parser("setup", help="add the people the desk looks after to that system")
+    cs.add_argument("system", choices=["servicenow", "salesforce"])
+    cs.set_defaults(func=cmd_connector_setup)
+    cf = con.add_parser("file", help="file a ticket in that system as one of the desk's people (to try it)")
+    cf.add_argument("system", choices=["servicenow", "salesforce"])
+    cf.add_argument("--person", required=True)
+    cf.add_argument("subject")
+    cf.add_argument("body", nargs="?", default="")
+    cf.set_defaults(func=cmd_connector_file)
+    con.add_parser("sync", help="one sync pass now").set_defaults(func=cmd_connector_sync)
     s = sub.add_parser("serve", help="serve the read-only rules UI")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8770)
