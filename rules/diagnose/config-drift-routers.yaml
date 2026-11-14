@@ -20,7 +20,7 @@ steps:
     ask: Was an automation job running when this arrived?
     check: change_window_open
     then:
-      open: stop A job held the change lock, so this change was expected.
+      open: stop A job was changing the network, so this change was expected.
   - id: diff
     phase: confirm
     ask: Does {device} still differ from its known-good copy?

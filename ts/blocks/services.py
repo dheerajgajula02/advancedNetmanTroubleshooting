@@ -318,14 +318,19 @@ def changed_sections(ctx, device):
 
 
 @check("change_window_open", [], ["open", "closed"], platforms=HOST,
-       description="Whether an automation job held the network change lock when the event arrived")
+       description="Whether a job was changing the network when the event arrived: one holding the network change lock, "
+                   "or a Jenkins job that changes the network or tests it by changing it, running or just finished")
 def change_window_open(ctx):
-    held = ctx.event.get("change_running")
+    held, jobs = ctx.event.get("change_running"), ctx.event.get("changing_jobs") or []
+    if jobs:
+        ev = Evidence("file", "Jenkins build records of the jobs that change the network, when the event arrived",
+                      output="\n".join(jobs), note="Running then, or finished within the 5 minutes before")
+        return Result("open", f"A job was changing the network when this arrived ({', '.join(jobs)}).", evidence=[ev])
     ev = Evidence("file", f"flock entry for {lab.CHANGE_LOCK} in /proc/locks when the event arrived",
-                  output={True: "held", False: "not held", None: "not recorded for this event"}[held])
+                  output={True: "held", False: "not held", None: "not recorded for this event"}[bool(held) if held is not None else None])
     if held:
         return Result("open", "An automation job held the network change lock when this arrived.", evidence=[ev])
-    return Result("closed", "No automation job held the network change lock when this arrived.", evidence=[ev])
+    return Result("closed", "No job was changing the network when this arrived.", evidence=[ev])
 
 
 _CONFIG_LOG = re.compile(r"%SYS-5-CONFIG_(?:STARTUP|I): .*? (?:from \S+ )?by (.+?)\.?$|%SYS-5-CONFIG_I: Configured from (.+)$")

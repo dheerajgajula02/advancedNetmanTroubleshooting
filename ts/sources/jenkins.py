@@ -20,6 +20,11 @@ CHANGES_NETWORK = re.compile(r"network-health-monitor|advtests-orchestrator|lab1
 _NOTE = re.compile(r"\x1b\[8mha:.*?\x1b\[0m")
 _FIELD = {k: re.compile(rf"<{k}>([^<]*)</{k}>") for k in ("startTime", "timestamp", "result", "duration", "completed")}
 SCAN_BACK = 40
+# What the network does just after one of those jobs is often still its doing (a failover settling, a port coming back).
+AFTER_A_JOB = 300
+# The hourly health monitor holds the change lock whenever it changes anything. Counting its runs as well would leave
+# traps and the sweep deaf for the minutes after each one, every hour.
+HOLDS_THE_LOCK = re.compile(r"network-health-monitor", re.I)
 
 
 def _jobs(folder: Path | None = None, prefix: str = "", own: bool = False):
@@ -99,6 +104,14 @@ def running_change_jobs() -> list[str]:
     """Jobs running right now that change the network or test it by changing it."""
     return [f"{name} #{b['number']}" for name, folder in _jobs() if CHANGES_NETWORK.search(name)
             for b in _recent(folder, time.time() - 21600) if b["result"] is None and time.time() - b["start"] < 14400]
+
+
+def changing_network_now(now: float | None = None, after: float = AFTER_A_JOB) -> list[str]:
+    """Jobs changing the network now, or that finished less than `after` seconds ago. The nightly tests break things
+    on purpose without taking the change lock, so a trap or a sweep finding from that time is most likely theirs."""
+    now = time.time() if now is None else now
+    return [w["job"] for w in change_windows(now - after)
+            if w["start"] <= now <= w["end"] + after and not HOLDS_THE_LOCK.search(w["job"])]
 
 
 def change_windows(since: float, scan: int = 400) -> list[dict]:

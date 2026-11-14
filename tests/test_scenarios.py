@@ -109,6 +109,55 @@ def test_sweep_sits_out_a_change_job(monkeypatch):
     assert sweep.run({}) == []
 
 
+def _jenkins_build(root, job, number, start, seconds=None, result="SUCCESS"):
+    """One build record laid out the way Jenkins keeps it; without seconds it is still running."""
+    folder = root / "advNetmanTests" / "jobs" / job
+    (folder / "builds" / str(number)).mkdir(parents=True, exist_ok=True)
+    (folder / "nextBuildNumber").write_text(str(number + 1))
+    done = f"<result>{result}</result><duration>{int(seconds * 1000)}</duration>" if seconds is not None else "<completed>false</completed>"
+    (folder / "builds" / str(number) / "build.xml").write_text(f"<build><startTime>{int(start * 1000)}</startTime>{done}</build>")
+
+
+def test_a_test_job_without_the_lock_still_counts_as_changing_the_network(monkeypatch, tmp_path):
+    from ts.sources import jenkins
+    monkeypatch.setattr(jenkins, "ROOT", tmp_path)
+    monkeypatch.setattr(lab, "change_running", lambda *a: False)
+    _jenkins_build(tmp_path, "lab1-vrrp-failover", 7, start=1000.0, seconds=40)
+    assert jenkins.changing_network_now(1020.0) == ["advNetmanTests/lab1-vrrp-failover #7"]
+    assert jenkins.changing_network_now(1040.0 + 299) == ["advNetmanTests/lab1-vrrp-failover #7"]  # its effects outlast it
+    assert jenkins.changing_network_now(1040.0 + 301) == []
+    assert jenkins.changing_network_now(999.0) == []
+    assert sweep.changing(1020.0) == {"change_running": True, "changing_jobs": ["advNetmanTests/lab1-vrrp-failover #7"]}
+    assert sweep.changing(5000.0) == {"change_running": False}
+
+
+def test_the_hourly_health_monitor_counts_by_its_lock_alone(monkeypatch, tmp_path):
+    from ts.sources import jenkins
+    monkeypatch.setattr(jenkins, "ROOT", tmp_path)
+    _jenkins_build(tmp_path, "network-health-monitor", 3, start=1000.0, seconds=20)
+    assert jenkins.changing_network_now(1010.0) == []
+
+
+def test_sweep_sits_out_a_running_test_job(monkeypatch, tmp_path):
+    import time
+    from ts.sources import jenkins
+    monkeypatch.setattr(jenkins, "ROOT", tmp_path)
+    monkeypatch.setattr(lab, "change_running", lambda *a: False)
+    _jenkins_build(tmp_path, "advtests-orchestrator", 282, start=time.time() - 60)  # still running
+    monkeypatch.setattr(sweep, "_gather", lambda log, with_drift=False: pytest.fail("looked while the nightly tests were running"))
+    assert sweep.run({}) == []
+
+
+def test_the_change_check_names_the_job(monkeypatch):
+    ctx = dataclasses.make_dataclass("Ctx", ["event"])
+    test = CHECKS["change_window_open"].func(ctx({"change_running": True, "changing_jobs": ["advNetmanTests/lab2-traps #260"]}))
+    assert test.outcome == "open" and "lab2-traps #260" in test.saw
+    lock = CHECKS["change_window_open"].func(ctx({"change_running": True}))
+    assert lock.outcome == "open" and "change lock" in lock.saw
+    assert CHECKS["change_window_open"].func(ctx({"change_running": False})).outcome == "closed"
+    assert CHECKS["change_window_open"].func(ctx({})).outcome == "closed"
+
+
 def test_secrets_never_reach_a_diff():
     lines = configs.clean("username admin secret 5 abc\nsnmp-server community public ro\nenable password x\nhostname s1\n! comment\n")
     assert lines == ["hostname s1"]

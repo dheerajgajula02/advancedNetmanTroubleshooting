@@ -235,13 +235,24 @@ def step(state: dict, gathered: list[tuple[str, list[Finding]]], now: float) -> 
     return events
 
 
+def changing(at: float | None = None) -> dict:
+    """Whether something was changing the network: a job holding the change lock now, or a Jenkins job that changes
+    the network or tests it by changing it, running at `at` (default now) or just finished. What a trap or the sweep
+    sees then is most likely that job's doing. Merged into an event as change_running and changing_jobs."""
+    try:
+        jobs = jenkins.changing_network_now(at)
+    except Exception:  # noqa: BLE001 - the job records cannot be read: go by the lock alone
+        jobs = []
+    return {"change_running": lab.change_running() or bool(jobs), **({"changing_jobs": jobs[:4]} if jobs else {})}
+
+
 def run(state: dict, log=print) -> list[dict]:
-    if lab.change_running():
+    if changing()["change_running"]:
         return []
     tick = state.get("_tick", {"n": 0})["n"] + 1
     state["_tick"] = {"n": tick, "at": time.time()}
     gathered = _gather(log, with_drift=tick % DRIFT_EVERY == 0)
-    if lab.change_running():  # it started while we were looking, so what we saw may be its doing
+    if changing()["change_running"]:  # one started while we were looking, so what we saw may be its doing
         return []
     events = step(state, gathered, time.time())
     for event in events:

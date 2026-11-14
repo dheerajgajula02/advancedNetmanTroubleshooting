@@ -231,7 +231,10 @@ def _run_event(rules, event, rerun=False, root=DEFAULT_RULES_DIR, hand_over=None
     if learned:
         record.update(learned=True, before_rules=first)
     r = record["result"]
-    kept = event.get("source") == "ticket" or not (any(rule.quiet_stops for rule in chain if rule.position == "main") and r["kind"] == "stop")
+    # A stop is not kept when the rule says its stops are routine, or when a job was changing the network at the time:
+    # the nightly tests break things on purpose, and a run that found nothing then is only their echo.
+    quiet = any(rule.quiet_stops for rule in chain if rule.position == "main") or event.get("change_running")
+    kept = event.get("source") == "ticket" or not (quiet and r["kind"] == "stop")
     if kept:
         pipeline.finish(record, rules, print, inline=hand_over is None, root=root)
         stages.advance(record)  # its build in troubleshooting-run, as far as the run has got
@@ -288,7 +291,7 @@ def cmd_watch(args) -> int:
     import queue
     import threading
     import time
-    from ts import engine, lab, store, sweep
+    from ts import engine, store, sweep
     from ts.intake import TRAPS_LOG, Waiting, events_since, follow, parse_line
     from ts.vocab import FORBIDDEN_DEVICES
 
@@ -382,7 +385,7 @@ def cmd_watch(args) -> int:
     # Traps that arrived while the watcher was not running (a restart, a crash).
     for event in events_since(time.time() - args.catch_up * 60):
         if not store.exists(engine.incident_id(event)):
-            event["change_running"] = lab.change_running()
+            event.update(sweep.changing(float(event["time"])))
             wait_for(event, "catching up")
 
     found: queue.Queue = queue.Queue()
@@ -426,7 +429,7 @@ def cmd_watch(args) -> int:
         if line:
             event = parse_line(line)
             if event:
-                event["change_running"] = lab.change_running()
+                event.update(sweep.changing())
                 wait_for(event, "trap")
             continue
         while not found.empty():

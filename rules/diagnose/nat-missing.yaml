@@ -18,7 +18,7 @@ steps:
     ask: Was an automation job running when this arrived?
     check: change_window_open
     then:
-      open: stop A job held the change lock, so this was expected.
+      open: stop A job was changing the network, so this was expected.
   - id: rule
     phase: confirm
     ask: Is the NAT rule really gone from {device}?
