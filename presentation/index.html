@@ -1,0 +1,379 @@
+<title>Netman Troubleshooter</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one 16:9 stage that grows a flowchart node by node; each node opens the real page it stands for.
+   Single dark theme on purpose: it is projected, and it matches the Netman screens it opens. */
+:root {
+  color-scheme: dark;
+  --bg: #0a0b0d; --surface: #111317; --surface-2: #171a1f; --line: #262b33; --line-2: #343b46;
+  --text: #e8eaee; --text-2: #b6bcc6; --muted: #7f8792;
+  --accent: #93b4ff;            /* Netman blue: the flow itself */
+  --ai: #b79cff;                /* violet: where a model is involved, as on the Netman pages */
+  --ok: #5fc493; --ext: #e3b35f; /* amber: systems outside ours (ServiceNow, the hackathon gym) */
+  --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); -webkit-font-smoothing: antialiased; overflow: hidden; }
+.app { height: 100%; display: grid; grid-template-rows: auto 1fr auto; gap: 10px; padding-block: 14px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; max-width: 1500px; width: 100%; margin: 0 auto; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mark { width: 26px; height: 26px; border-radius: 8px; background: conic-gradient(from 200deg, #6f8dff, #b79cff, #5fc493, #6f8dff); display: grid; place-items: center; flex: none; }
+.mark::after { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--bg); }
+.brand b { font-weight: 700; letter-spacing: -.01em; font-size: 15px; }
+.brand span { color: var(--muted); font-size: 13px; }
+.chapters { display: flex; gap: 6px; flex-wrap: wrap; }
+.chapters span { font: 600 12px var(--mono); padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line-2); color: var(--muted); transition: color .3s, border-color .3s; }
+.chapters span.on { color: var(--accent); border-color: var(--accent); }
+.chapters span.on[data-ch="2"] { color: var(--ext); border-color: var(--ext); }
+.dots { display: flex; gap: 5px; margin-left: auto; }
+.dots i { width: 12px; height: 4px; border-radius: 2px; background: var(--line-2); transition: background .3s; }
+.dots i.ch2 { background: rgba(227,179,95,.25); }
+.dots i.ch2.on { background: var(--ext); }
+.dots i.on { background: var(--accent); }
+.keys { color: var(--muted); font: 12px var(--mono); }
+.keys kbd { font: inherit; border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--text-2); }
+
+.stagewrap { min-height: 0; display: grid; place-items: center; }
+.stage { position: relative; width: min(100%, calc((100vh - 170px) * 16 / 9)); max-width: 1500px; aspect-ratio: 16 / 9; container-type: inline-size;
+  background: radial-gradient(ellipse at 70% 0%, rgba(147,180,255,.07), transparent 60%), var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.stage::before { content: ""; position: absolute; inset: 0; background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1px); background-size: 2.2cqw 2.2cqw; pointer-events: none; }
+svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; }
+.edge { fill: none; stroke: var(--accent); stroke-width: 2.4; opacity: .85; transition: stroke-dashoffset .9s ease; }
+.edge.ai { stroke: var(--ai); }
+.edge.ext { stroke: var(--ext); }
+.edge.next { stroke: var(--muted); }
+.elabel { font: 600 15px var(--mono); fill: var(--text-2); opacity: 0; transition: opacity .5s .5s; }
+.elabel.on { opacity: 1; }
+.arrowhead { fill: var(--accent); } .arrowhead.ai { fill: var(--ai); } .arrowhead.ext { fill: var(--ext); } .arrowhead.next { fill: var(--muted); }
+
+.node { position: absolute; width: 18.75cqw; min-height: 7.5cqw; transform: translate(-50%, -50%) scale(.92); opacity: 0; pointer-events: none;
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 1cqw; padding: 1cqw 1.2cqw 1.9cqw; text-align: left; color: var(--text); font: inherit; cursor: pointer;
+  transition: opacity .45s ease, transform .45s ease, border-color .2s, box-shadow .2s; }
+.node.on { opacity: 1; transform: translate(-50%, -50%) scale(1); pointer-events: auto; }
+.node:hover, .node:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 .3cqw rgba(147,180,255,.18); }
+.node.current { border-color: var(--accent); box-shadow: 0 0 0 .3cqw rgba(147,180,255,.22), 0 1cqw 3cqw rgba(0,0,0,.5); }
+.node.ai { border-color: rgba(183,156,255,.55); } .node.ai.current, .node.ai:hover { border-color: var(--ai); box-shadow: 0 0 0 .3cqw rgba(183,156,255,.2); }
+.node.ext { border-color: rgba(227,179,95,.5); } .node.ext.current, .node.ext:hover { border-color: var(--ext); box-shadow: 0 0 0 .3cqw rgba(227,179,95,.18); }
+.node .t { display: flex; align-items: center; gap: .6cqw; font-weight: 700; font-size: 1.45cqw; letter-spacing: -.01em; line-height: 1.2; }
+.node .s { color: var(--text-2); font-size: 1.02cqw; line-height: 1.35; margin-top: .4cqw; }
+.chip { font: 600 .78cqw var(--mono); padding: .1cqw .45cqw; border-radius: .35cqw; border: 1px solid currentColor; letter-spacing: .02em; white-space: nowrap; }
+.chip.ai { color: var(--ai); } .chip.ext { color: var(--ext); }
+.node .open { position: absolute; right: .9cqw; bottom: .7cqw; font: .8cqw var(--mono); color: var(--muted); }
+
+.finale { position: absolute; left: 2.5cqw; right: 2.5cqw; bottom: 3.2cqw; opacity: 0; transition: opacity .6s; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2.5cqw; pointer-events: none; }
+.finale.on { opacity: 1; }
+.finale .big { font-weight: 800; font-size: 3.4cqw; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.finale .lbl { color: var(--text-2); font-size: 1.05cqw; line-height: 1.35; margin-top: .45cqw; }
+.finale .ai .big { color: var(--ai); } .finale .ok .big { color: var(--ok); } .finale .ext .big { color: var(--ext); } .finale .flow .big { color: var(--accent); }
+.lead2 { position: absolute; left: 2.5cqw; bottom: 3.2cqw; width: 58cqw; opacity: 0; transition: opacity .5s; pointer-events: none; }
+.lead2.on { opacity: 1; }
+.lead2 .kicker { font: 600 1cqw var(--mono); color: var(--ext); letter-spacing: .06em; text-transform: uppercase; }
+.lead2 h2 { margin: .5cqw 0 0; font-size: 2.4cqw; line-height: 1.08; letter-spacing: -.03em; font-weight: 800; text-wrap: balance; }
+.lead2 h2 em { font-style: normal; color: var(--ext); }
+.lead2 p { margin: .7cqw 0 0; color: var(--text-2); font-size: 1.1cqw; line-height: 1.4; max-width: 50cqw; }
+.lead { position: absolute; left: 2.5cqw; bottom: 3cqw; width: 22cqw; transition: opacity .4s; }
+.lead h1 { margin: 0; font-size: 2.6cqw; line-height: 1.05; letter-spacing: -.03em; font-weight: 800; text-wrap: balance; }
+.lead h1 em { font-style: normal; color: var(--accent); }
+.lead p { margin: .8cqw 0 0; color: var(--text-2); font-size: 1.1cqw; line-height: 1.4; }
+.lead.off { opacity: 0; }
+
+.caption { max-width: 1500px; width: 100%; margin: 0 auto; display: flex; gap: 14px; align-items: center; min-height: 52px; }
+.caption p { margin: 0; font-size: clamp(15px, 1.35vw, 21px); line-height: 1.4; flex: 1; min-width: 0; text-wrap: pretty; }
+.btn { background: var(--surface-2); color: var(--text); border: 1px solid var(--line-2); border-radius: 9px; padding: 9px 14px; font: 600 14px var(--sans); cursor: pointer; flex: none; }
+.btn:hover, .btn:focus-visible { border-color: var(--accent); outline: none; }
+.btn.primary { background: var(--accent); color: #0a0d14; border-color: var(--accent); }
+
+.viewer { position: fixed; inset: 0; z-index: 20; background: rgba(5,6,8,.84); backdrop-filter: blur(4px); display: grid; place-items: center;
+  padding-block: max(18px, env(safe-area-inset-top, 0px)) max(18px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.sheet { width: min(1500px, 100%); max-height: 100%; display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr); gap: 18px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 14px; padding: 16px; overflow: auto; animation: rise .3s ease; }
+@keyframes rise { from { transform: translateY(10px); opacity: 0; } }
+.shot { min-width: 0; display: grid; gap: 8px; align-content: start; }
+.shot img { width: 100%; border-radius: 9px; border: 1px solid var(--line); display: block; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabs button { background: none; border: 1px solid var(--line-2); color: var(--text-2); border-radius: 7px; padding: 4px 10px; font: 12px var(--mono); cursor: pointer; }
+.tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); }
+.side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.side h2 { margin: 0; font-size: 22px; letter-spacing: -.02em; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.side h2 .chip { font-size: 11px; padding: 1px 6px; border-radius: 5px; }
+.side .where { font: 12px var(--mono); color: var(--muted); word-break: break-all; }
+.side ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; color: var(--text-2); font-size: 15px; line-height: 1.45; }
+.side ul b { color: var(--text); font-variant-numeric: tabular-nums; }
+.side .close { margin-top: auto; align-self: flex-start; }
+
+@media (max-width: 1500px) { .brand span { display: none; } }
+@media (max-width: 760px) {
+  body { overflow: auto; }
+  .app { height: auto; }
+  .keys { display: none; }
+  .stage { width: 100%; aspect-ratio: auto; container-type: normal; padding: 14px; display: grid; gap: 10px; }
+  .stage::before, svg.edges, .finale, .lead, .lead2 { display: none; }
+  .node { position: relative; left: auto !important; top: auto !important; width: 100%; transform: none !important; min-height: 0; padding: 12px 14px; display: none; border-radius: 10px; }
+  .node.on { display: block; }
+  .node .t { font-size: 16px; gap: 8px; } .node .s { font-size: 13px; } .chip { font-size: 10px; padding: 1px 5px; border-radius: 4px; } .node .open { display: none; }
+  .sheet { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="app">
+  <header>
+    <div class="brand"><div class="mark"></div><div><b>Netman Troubleshooter</b> <span>· the network that fixes itself, then learns</span></div></div>
+    <div class="chapters" id="chapters"><span data-ch="1">1 · Live network</span><span data-ch="2">2 · The gym · Meta hackathon</span></div>
+    <div class="dots" id="dots" aria-hidden="true"></div>
+    <div class="keys"><kbd>→</kbd> next &nbsp;<kbd>←</kbd> back &nbsp;<kbd>Enter</kbd> open</div>
+  </header>
+
+  <div class="stagewrap">
+    <div class="stage" id="stage">
+      <svg class="edges" id="edges" viewBox="0 0 1600 900" aria-hidden="true">
+        <defs>
+          <marker id="h-flow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="h-ai" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead ai" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="h-ext" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead ext" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="h-next" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead next" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+      </svg>
+      <div class="lead" id="lead">
+        <h1>Most outages are fixed by someone who <em>has seen it before.</em></h1>
+        <p>We built that someone, for a real lab network, and taught it to keep learning.</p>
+      </div>
+      <div class="lead2" id="lead2">
+        <div class="kicker">Part 2 · NetOps RL · built for the Meta hackathon</div>
+        <h2>A gym where AI practises on <em>broken copies</em> of the network.</h2>
+        <p>Faults are injected on purpose, an AI fixes them, and the lab, never the AI, grades the result. Every attempt becomes training data for our own model.</p>
+      </div>
+      <div class="finale" id="finale"></div>
+    </div>
+  </div>
+
+  <div class="caption">
+    <button class="btn" id="back" type="button" aria-label="Back">←</button>
+    <p id="say"></p>
+    <button class="btn" id="openit" type="button">Open</button>
+    <button class="btn primary" id="next" type="button">Next →</button>
+  </div>
+</div>
+
+<div class="viewer" id="viewer" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="vtitle">
+    <div class="shot" id="vshot"></div>
+    <div class="side">
+      <h2 id="vtitle"></h2>
+      <div class="where" id="vwhere"></div>
+      <ul id="vfacts"></ul>
+      <button class="btn close" id="vclose" type="button">Close (Esc)</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const NODES = [
+  { id: "network", ch: 1, x: 190, y: 175, title: "The network", sub: "22 devices: Arista and FRR routers, switches, hosts, an ISP",
+    say: "A real lab network: 22 routers, switches and hosts, Arista and FRR, with live traffic and streaming telemetry.",
+    shots: [["Live topology", "shots/topology.jpg"]], where: "Netman › Live topology",
+    facts: ["<b>22</b> devices across border, core, distribution, access and the hosts", "Traffic and link state straight from Prometheus", "Netman is the source of truth: every device's intended config lives in Git"] },
+  { id: "detect", ch: 1, x: 590, y: 175, title: "Something breaks", sub: "a monitor, a ticket, a device alarm or the sweep",
+    say: "Trouble gets in four ways: a monitor the AI wrote fires, a person opens a ticket, a device sends an alarm, or the sweep every 20 minutes finds it.",
+    shots: [["Monitor", "shots/trig-monitor.jpg"], ["Monitor · Grafana", "shots/trig-grafana.jpg"], ["Ticket · our desk", "shots/desk.jpg"], ["Ticket · ServiceNow", "shots/servicenow.jpg"], ["Alarm · traps in", "shots/trig-alarm-feed.jpg"], ["Alarm · its run", "shots/trig-alarm.jpg"], ["Sweep", "shots/trig-sweep.jpg"]],
+    wheres: ["Troubleshooting › Monitors", "Grafana › Troubleshooting › Troubleshooting monitors, Nov 11", "Service desk › T-15", "dev482281.service-now.com › INC0010001 (the same ticket)", "Grafana › Lab3 Syslog & Event Overview › SNMP traps, Nov 11", "Troubleshooting › run: s1 Ethernet4 went down", "Troubleshooting › Now"],
+    where: "Our Monitors page · Grafana · our service desk · ServiceNow · Troubleshooting › Now",
+    facts: ["<b>Monitor</b>: the AI suggested it, a person accepted it. When flaps or OSPF traps pass 15 in 10 minutes it starts a run; it has done that on its own. Its numbers also go to Prometheus and Grafana", "<b>Ticket</b>: a person writes in on our desk, or it comes from ServiceNow; both are the same ticket (T-15 is INC0010001)", "<b>Alarm</b>: s1 sent linkDown at 21:17:35; within 2 minutes the rules found the port shut by hand and put it back, and linkUp followed", "<b>Sweep</b>: every 20 minutes, 96 checks over every host and link; it catches what no device reports, like a lost NAT rule", "<b>570</b> runs so far: <b>487</b> alarms, <b>64</b> sweep, <b>16</b> tickets, <b>3</b> monitors"] },
+  { id: "firstlook", ch: 1, x: 990, y: 175, title: "First look", sub: "did anything change from known-good?",
+    say: "First question, every time: was it working before, and did anything change from the known-good config? A change nobody asked for is put back.",
+    shots: [["Golden configs", "shots/golden.jpg"]], where: "Netman › Golden configs",
+    facts: ["Known-good snapshot <b>20261114T111535Z</b> covers the 8 managed routers and switches", "Drift is restored through its own repair, as its own Jenkins build", "Deliberate stop-gaps are never undone blindly"] },
+  { id: "rules", ch: 1, x: 1390, y: 175, title: "Rules first", sub: "28 diagnosis rules, 13 repairs, each a Jenkins pipeline",
+    say: "Then the rules: 28 diagnosis rules and 13 repairs, each one its own Jenkins pipeline. Cheap, fast and predictable, so most problems never reach an AI.",
+    shots: [["A real run", "shots/run.jpg"], ["All 41 rules", "shots/rules-list.jpg"], ["The 19 the AI wrote", "shots/rules-ai.jpg"]], where: "Troubleshooting › a run (troubleshooting-run #23) · Rules & review › Rules",
+    facts: ["<b>41</b> rules installed: <b>22</b> we built, <b>19</b> the AI wrote and a person approved", "<b>28</b> find the cause, <b>13</b> repair, every repair verified after", "A rule only combines registered checks, so it never runs arbitrary code", "A new AI rule can start watch-only: it says what it would do before it may act", "The same stages show in the page and in Jenkins"] },
+  { id: "ai", ch: 1, x: 1390, y: 470, ai: true, chip: ["AI", "ai"], title: "AI check, then AI fix", sub: "only when the rules run out",
+    say: "Only when the rules run out does AI step in. One model checks whether it is still broken; only then does the support agent fix it. Last night r3 stopped forwarding at 02:54; it was fixed at 02:56 with no person involved.",
+    shots: [["What the AI did", "shots/run-ai.jpg"], ["The models", "shots/models.jpg"]], where: "Troubleshooting › run 20261114T095401Z-h1-internet",
+    facts: ["The AI check reads only; it can say working, broken or unsure", "The support agent changed <b>1</b> thing in <b>9</b> steps and verified h1 reached the internet", "Every model is chosen on the AI models page, per job"] },
+  { id: "context", ch: 1, x: 1390, y: 760, ai: true, chip: ["RAG", "ai"], title: "What it knows", sub: "every past run and two weeks of logs, found by words and meaning",
+    say: "It never starts blind. The AI is handed every past run grouped by cause, the five closest cases, what people approved or turned down, and the logs, metrics, builds and config changes from around that time. Every finished run adds itself, so the memory keeps growing on its own.",
+    shots: [["The exact text it starts from", "shots/ctx-prompt.jpg"], ["Memory search", "shots/ctx-memory.jpg"]], where: "Troubleshooting › run 20261114T095401Z-h1-internet › The AI took over",
+    facts: ["<b>570</b> runs cut into <b>3,160</b> pieces: symptom, cause, what worked, what failed, every command with its output", "Found by exact words (eth3, netem) and by meaning: \"can't get online\" finds \"cannot reach the internet\"", "A long memory of <b>13,649</b> records, read every 10 minutes from the syslog data lake, Prometheus, Jenkins and GitHub", "Also handed over: the known-good check, the rule results, the ticket's earlier messages, its own notes, and rejected suggestions with the reason", "Updates itself after every run. Word search needs no GPU; meaning search catches up whenever the GPU host is up"] },
+  { id: "learn", ch: 1, x: 990, y: 470, ai: true, chip: ["AI", "ai"], title: "It learns", sub: "the AI writes rules and monitors; a person approves",
+    say: "Every fix teaches it. The AI writes a new rule or monitor, proves it on last week's data, and a person approves it. Next time the rules handle it alone.",
+    shots: [["Rules it wrote", "shots/review.jpg"], ["Monitors it wrote", "shots/monitors.jpg"]], where: "Troubleshooting › Rules & review, Monitors",
+    facts: ["<b>19</b> suggestions accepted, <b>4</b> turned down, each with a reason it remembers", "A monitor is replayed over the past week before it is offered: it must catch the incident with almost no false alarms", "Accepted monitors feed Prometheus and Grafana"] },
+  { id: "tools", ch: 1, x: 590, y: 470, ext: true, chip: ["ServiceNow", "ext"], title: "Your ticket system", sub: "incidents come in, replies and fixes go back",
+    say: "It plugs into the ticket system a company already runs. A ServiceNow incident becomes our ticket; our replies, work notes and the fix go back, and it is resolved there.",
+    shots: [["ServiceNow incident", "shots/servicenow.jpg"], ["Our service desk", "shots/desk.jpg"]], where: "dev482281.service-now.com › Incident",
+    facts: ["The AI's questions go out as comments on the incident; the caller's answers come back to it", "Status follows: in progress, awaiting caller, resolved with a close code", "Problems it finds on its own open an incident there too", "Salesforce Service Cloud: the same connector, built and unit-tested"] },
+  { id: "gym", ch: 1, x: 990, y: 760, ext: true, chip: ["Hackathon", "ext"], title: "Into the gym", sub: "part 2: NetOps RL, built for the Meta hackathon",
+    say: "Everything it records feeds the second half of the project: the gym we built for the Meta hackathon.",
+    shots: [["The NetOps RL console", "shots/hk-overview.jpg"]], where: "NetOps RL console · mghack.dheerajgajula.com",
+    facts: ["One product, two halves: the live troubleshooter, and the gym that trains it", "Collect, data, train, test and results in one console", "Public at mghack.dheerajgajula.com, with a judge login"] },
+
+  { id: "lab", ch: 2, x: 190, y: 175, ext: true, chip: ["Lab", "ext"], title: "Copies of a lab", sub: "an FRR leaf-spine: 10 routers, 5 hosts, an ISP, a customer",
+    say: "The gym starts with copies of a lab network: a leaf-spine fabric with two borders, an ISP and a customer. 44 copies are set up across five machines, so many attempts run at once.",
+    shots: [["The lab", "shots/hk-topology.jpg"], ["The whole pipeline", "shots/hk-overview.jpg"]], where: "NetOps RL › Lab · mghack.dheerajgajula.com",
+    facts: ["<b>15</b> devices: 2 spines, 4 leaves, 2 borders, an ISP, a customer router and 5 hosts", "<b>44</b> lab copies on 5 machines; Claude Code proposes the split and a person approves it", "Every attempt starts from an identical snapshot, so attempts can be compared"] },
+  { id: "bank", ch: 2, x: 590, y: 175, ext: true, title: "Break it on purpose", sub: "34 kinds of fault, 904 generated instances",
+    say: "Then we break it on purpose: a shut BGP session, a gray failure, a hung router, a QoS change that only hurts voice, and decoys that look broken but are not.",
+    shots: [["Scenario bank", "shots/hk-bank.jpg"], ["Campaigns", "shots/hk-campaigns.jpg"]], where: "NetOps RL › Collect › Environments, Campaigns",
+    facts: ["<b>904</b> instances from <b>23</b> procedural templates, plus the classic scenarios", "Healthy networks with decoys, where doing nothing is the right answer", "Every scenario is proven first: a scripted fix must solve it, and doing nothing must not", "A campaign targets one kind of failure: it proposes variants, collects attempts and builds a dataset"] },
+  { id: "agent", ch: 2, x: 990, y: 175, ai: true, chip: ["AI", "ai"], title: "The AI works it", sub: "typed tools over MCP, or one console; every call says why",
+    say: "An AI agent gets the alert and works it like an engineer: list the devices, trace the path, read the counters, make the smallest change. Every call carries its reason.",
+    shots: [["Every step, with its reason", "shots/hk-trajectory.jpg"], ["All attempts", "shots/hk-rollouts.jpg"]], where: "NetOps RL › Results › Rollouts",
+    facts: ["Two tracks: a typed MCP tool catalog, or one run_command on the router console", "<b>192k</b> tool calls on the tools track alone, each with its rationale", "<b>38</b> models and effort levels have played, from free models to frontier ones", "A change journal is there too, so it must tell planned maintenance from a forgotten change"] },
+  { id: "grader", ch: 2, x: 1390, y: 175, ext: true, chip: ["Grader", "ext"], title: "The lab grades it", sub: "never the AI: solved, honest fail, overclaim, no report",
+    say: "The lab itself grades the result, never the AI. Saying fixed is not enough: if the network disagrees, that is an overclaim, and 40 percent of all attempts were exactly that.",
+    shots: [["The verdict", "shots/hk-episode.jpg"], ["Arena", "shots/hk-arena.jpg"]], where: "NetOps RL › Results › an attempt (q04~7, Muse Spark 1.3)",
+    facts: ["<b>6,934</b> graded attempts on the tools track: <b>44%</b> solved, <b>8%</b> honest fail, <b>40%</b> overclaim", "It checks the network itself: flows, voice targets, collateral damage, and whether the report was honest", "The injected fault and the expected fix stay hidden from the agent", "Here: voice policed to 2% on leaf3. Found and fixed in 39 steps, and the customer's call came back"] },
+  { id: "data", ch: 2, x: 1390, y: 470, ext: true, chip: ["Data", "ext"], title: "Turn it into data", sub: "12k attempts, 1,952 lessons, 35k checked study questions",
+    say: "Every attempt becomes data. When a run fails, a model that solved the same fault writes the lesson and a referee model checks it. RFCs and FRR docs become checked study questions.",
+    shots: [["Datasets", "shots/hk-datasets.jpg"], ["Lessons", "shots/hk-lessons.jpg"], ["Library Q&A", "shots/hk-study.jpg"]], where: "NetOps RL › Data",
+    facts: ["<b>12,113</b> attempts, <b>346,653</b> agent steps, <b>9 GB</b> of training data", "<b>1,952</b> lessons from failed runs accepted into training", "<b>35,419</b> study questions kept from RFCs, Wikipedia, FRR docs and our playbooks: cheap models write, a reviewer keeps, fixes or drops", "<b>361</b> playbooks written from our own solved runs"] },
+  { id: "train", ch: 2, x: 990, y: 470, ai: true, chip: ["AI", "ai"], title: "Train our own model", sub: "a rented GPU, a hard spending cap, deleted after",
+    say: "Then we fine-tune our own small models on it, on a rented GPU with a spending cap. The live troubleshooter records its AI steps the same way, so both halves feed one training set.",
+    shots: [["Fine-tune", "shots/hk-finetune.jpg"], ["Netman's Train page", "shots/train.jpg"]], where: "NetOps RL › Train · Netman › AI agents › Train",
+    facts: ["<b>20</b> fine-tuned models: Qwen3.5 2B, LFM3 1.7B, Needle and Muse Glimmer 30B", "<b>$34.60</b> GPU spend in all; at the limit training stops, the model is saved and the GPU deleted", "Scored on decisions it never trained on, against simply repeating the last call", "Netman's own first dataset: <b>287</b> support-agent examples"] },
+  { id: "test", ch: 2, x: 590, y: 470, ext: true, chip: ["Exam", "ext"], title: "Faults it never saw", sub: "5 held-out kinds, 100 proven scenarios",
+    say: "Last, the exam: five kinds of fault no model ever trained on, on the same network. Every model, big or ours, takes the same 40-fault bar; the best solved 70 percent.",
+    shots: [["Models tested", "shots/hk-tested.jpg"], ["Held-out faults", "shots/hk-heldout.jpg"], ["Leaderboard", "shots/hk-leaderboard.jpg"]], where: "NetOps RL › Test · Results › Models tested",
+    facts: ["<b>5</b> held-out kinds, <b>100</b> scenarios, all proven solvable; results never enter training", "The same 40 faults for every model: best <b>28/40</b> (Muse Spark 1.3) and <b>26/37</b> (gpt-5.6-sol)", "Each model's weak spots are listed: a quietly capped ECMP and gray failures beat almost all of them", "<b>20</b> exam runs kept, our fine-tunes side by side with their base models"] },
+];
+const EDGES = [
+  { ch: 1, to: "detect", d: "M340,175 L440,175" },
+  { ch: 1, to: "firstlook", d: "M740,175 L840,175" },
+  { ch: 1, to: "rules", d: "M1140,175 L1240,175" },
+  { ch: 1, to: "ai", d: "M1390,236 L1390,408", kind: "ai", label: "rules ran out", lx: 1404, ly: 328, anchor: "start" },
+  { ch: 1, to: "context", d: "M1390,698 L1390,534", kind: "ai", label: "context in", lx: 1404, ly: 622, anchor: "start" },
+  { ch: 1, to: "learn", d: "M1240,470 L1142,470", kind: "ai", label: "fixed", lx: 1191, ly: 456 },
+  { ch: 1, to: "learn", d: "M990,408 C990,318 1320,320 1320,238", kind: "ai", label: "next time: rules alone", lx: 1150, ly: 300 },
+  { ch: 1, to: "tools", d: "M840,470 L742,470", kind: "ext", label: "the fix", lx: 791, ly: 456 },
+  { ch: 1, to: "tools", d: "M590,408 L590,238", kind: "ext", label: "tickets in", lx: 604, ly: 328, anchor: "start" },
+  { ch: 1, to: "gym", d: "M1240,760 L1142,760", kind: "ext", label: "recorded", lx: 1191, ly: 746 },
+  { ch: 2, to: "bank", d: "M340,175 L440,175", kind: "ext" },
+  { ch: 2, to: "agent", d: "M740,175 L840,175", kind: "ext", label: "alert", lx: 790, ly: 161 },
+  { ch: 2, to: "grader", d: "M1140,175 L1240,175", kind: "ext", label: "report", lx: 1190, ly: 161 },
+  { ch: 2, to: "data", d: "M1390,236 L1390,408", kind: "ext", label: "graded attempts", lx: 1404, ly: 328, anchor: "start" },
+  { ch: 2, to: "train", d: "M1240,470 L1142,470", kind: "ai", label: "data", lx: 1191, ly: 456 },
+  { ch: 2, to: "test", d: "M840,470 L742,470", kind: "ai", label: "exam", lx: 791, ly: 456 },
+  { ch: 2, to: "test", d: "M590,408 L590,238", kind: "ext", label: "weak spots: next round", lx: 604, ly: 328, anchor: "start" },
+];
+const FINALE = [
+  { big: "570", lbl: "runs handled on the live network", kind: "ok" },
+  { big: "19", lbl: "rules and monitors the AI wrote, approved by a person", kind: "ai" },
+  { big: "12k", lbl: "attempts in the gym, graded by the lab, never by the AI", kind: "ext" },
+  { big: "38", lbl: "models and effort levels compared on the same faults", kind: "flow" },
+];
+const STEPS = [...NODES.map(n => n.id), "finale"];
+const FINALE_SAY = "Two halves, one loop: the live network fixes itself and records everything; the gym turns that into practice, grades it honestly and trains our own model.";
+
+const stage = document.getElementById("stage"), svg = document.getElementById("edges"), say = document.getElementById("say");
+const NS = "http://www.w3.org/2000/svg";
+let step = 0;
+
+const els = {};
+for (const n of NODES) {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "node" + (n.ai ? " ai" : "") + (n.ext ? " ext" : "");
+  b.style.left = (n.x / 16) + "%"; b.style.top = (n.y / 9) + "%";
+  b.innerHTML = `<div class="t">${n.title}${n.chip ? ` <span class="chip ${n.chip[1]}">${n.chip[0]}</span>` : ""}</div><div class="s">${n.sub}</div><span class="open">open ↗</span>`;
+  b.addEventListener("click", () => openNode(n));
+  stage.appendChild(b); els[n.id] = b;
+}
+const edgeEls = EDGES.map(e => {
+  const p = document.createElementNS(NS, "path");
+  p.setAttribute("d", e.d); p.setAttribute("class", "edge" + (e.kind ? " " + e.kind : ""));
+  p.setAttribute("marker-end", `url(#h-${e.kind || "flow"})`);
+  svg.appendChild(p);
+  const len = p.getTotalLength();
+  p.style.strokeDasharray = e.dashed ? "8 9" : len; p.style.strokeDashoffset = len; p.style.opacity = 0;
+  let t = null;
+  if (e.label) {
+    t = document.createElementNS(NS, "text"); t.setAttribute("x", e.lx); t.setAttribute("y", e.ly); t.setAttribute("class", "elabel");
+    t.setAttribute("text-anchor", e.anchor || "middle"); t.textContent = e.label; svg.appendChild(t);
+  }
+  return { e, p, t, len };
+});
+
+const chOf = id => id === "finale" ? 2 : (NODES.find(n => n.id === id).ch || 1);
+const dots = document.getElementById("dots");
+STEPS.forEach(id => { const i = document.createElement("i"); if (chOf(id) === 2) i.className = "ch2"; dots.appendChild(i); });
+document.getElementById("finale").innerHTML = FINALE.map(f => `<div class="${f.kind}"><div class="big">${f.big}</div><div class="lbl">${f.lbl}</div></div>`).join("");
+
+function render() {
+  const cur = STEPS[step], ch = chOf(cur);
+  // each chapter is its own flowchart: only that chapter's nodes so far are on the stage
+  const shown = new Set(STEPS.slice(0, step + 1).filter(id => chOf(id) === ch));
+  NODES.forEach(n => { els[n.id].classList.toggle("on", shown.has(n.id)); els[n.id].classList.toggle("current", cur === n.id); els[n.id].tabIndex = shown.has(n.id) ? 0 : -1; });
+  edgeEls.forEach(({ e, p, t, len }) => {
+    const on = (e.ch || 1) === ch && shown.has(e.to);
+    p.style.opacity = on ? (e.kind === "next" ? .75 : .85) : 0;
+    p.style.strokeDashoffset = on ? 0 : len;
+    if (t) t.classList.toggle("on", on);
+  });
+  document.getElementById("finale").classList.toggle("on", STEPS[step] === "finale");
+  document.getElementById("lead").classList.toggle("off", step > 0);
+  document.getElementById("lead2").classList.toggle("on", ch === 2 && cur !== "finale");
+  document.querySelectorAll("#chapters span").forEach(c => c.classList.toggle("on", Number(c.dataset.ch) === ch));
+  [...dots.children].forEach((d, i) => d.classList.toggle("on", i <= step));
+  const node = NODES.find(n => n.id === cur);
+  say.textContent = node ? node.say : FINALE_SAY;
+  document.getElementById("openit").hidden = !node;
+  document.getElementById("back").disabled = step === 0;
+  document.getElementById("next").textContent = step === STEPS.length - 1 ? "Start over" : "Next →";
+  try { localStorage.setItem("deck-step", String(step)); } catch (_) {}
+}
+function next() { step = step === STEPS.length - 1 ? 0 : step + 1; render(); }
+function back() { if (step > 0) { step--; render(); } }
+
+const viewer = document.getElementById("viewer");
+let shotAt = 0;
+function openNode(n) {
+  const shot = document.getElementById("vshot");
+  shot.innerHTML = ""; shotAt = 0;
+  if (n.shots) {
+    if (n.shots.length > 1) {
+      const tabs = document.createElement("div"); tabs.className = "tabs";
+      n.shots.forEach(([label, src], i) => {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.setAttribute("aria-pressed", String(i === 0));
+        b.addEventListener("click", () => { img.src = src; img.alt = label; shotAt = i; document.getElementById("vwhere").textContent = (n.wheres && n.wheres[i]) || n.where || ""; [...tabs.children].forEach(x => x.setAttribute("aria-pressed", String(x === b))); });
+        tabs.appendChild(b);
+      });
+      shot.appendChild(tabs);
+    }
+    const img = document.createElement("img"); img.src = n.shots[0][1]; img.alt = n.shots[0][0];
+    shot.appendChild(img);
+  }
+  document.getElementById("vtitle").innerHTML = n.title + (n.chip ? ` <span class="chip ${n.chip[1]}">${n.chip[0]}</span>` : "");
+  document.getElementById("vwhere").textContent = (n.wheres && n.wheres[0]) || n.where || "";
+  document.getElementById("vfacts").innerHTML = n.facts.map(f => `<li>${f}</li>`).join("");
+  viewer.hidden = false;
+  document.getElementById("vclose").focus();
+}
+function closeViewer() { viewer.hidden = true; }
+viewer.addEventListener("click", e => { if (e.target === viewer) closeViewer(); });
+document.getElementById("vclose").addEventListener("click", closeViewer);
+document.getElementById("next").addEventListener("click", next);
+document.getElementById("back").addEventListener("click", back);
+document.getElementById("openit").addEventListener("click", () => { const n = NODES.find(x => x.id === STEPS[step]); if (n) openNode(n); });
+document.addEventListener("keydown", e => {
+  if (!viewer.hidden) {
+    const tabs = [...viewer.querySelectorAll(".tabs button")];
+    if (e.key === "Escape") closeViewer();
+    else if (["ArrowRight", "PageDown", " "].includes(e.key)) { e.preventDefault(); if (shotAt < tabs.length - 1) tabs[shotAt + 1].click(); else { closeViewer(); next(); } }
+    else if (["ArrowLeft", "PageUp"].includes(e.key)) { e.preventDefault(); if (shotAt > 0) tabs[shotAt - 1].click(); }
+    else if (/^[1-9]$/.test(e.key) && tabs[+e.key - 1]) { e.preventDefault(); tabs[+e.key - 1].click(); }
+    return;
+  }
+  if (["ArrowRight", "PageDown", " "].includes(e.key)) { e.preventDefault(); next(); }
+  else if (["ArrowLeft", "PageUp"].includes(e.key)) { e.preventDefault(); back(); }
+  else if (e.key === "Enter" && !(document.activeElement && document.activeElement.classList.contains("node"))) { const n = NODES.find(x => x.id === STEPS[step]); if (n) { e.preventDefault(); openNode(n); } }
+});
+render();
+</script>
